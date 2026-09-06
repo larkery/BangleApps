@@ -1,4 +1,5 @@
 // banglejs app made by pancake
+// hacks by claude
 // sunrise/sunset script by Matt Kane from https://github.com/Triggertrap/sun-js
 
 const LOCATION_FILE = 'mylocation.json';
@@ -301,12 +302,113 @@ function drawClock () {
   }
 }
 
+// ---- sky colour + stars additions ----
+const skyTop = 30;
+const TWILIGHT = 0.9; // hours of twilight either side of sunrise/sunset
+const GOLDEN = 1.2;   // hours of warm "golden" sky after sunrise / before sunset
+
+const riseT = sunrise.getHours() + sunrise.getMinutes() / 60;
+const setT = sunset.getHours() + sunset.getMinutes() / 60;
+
+// pre-generate a stable star field so stars don't jump around every redraw
+const stars = [];
+(function () {
+  for (let i = 0; i < 45; i++) {
+    stars.push({
+      x: (Math.random() * w) | 0,
+      y: (skyTop + Math.random() * (oy - skyTop)) | 0,
+      thr: Math.random(),                             // fades in as night deepens
+      big: Math.random() < 0.15,                      // a few brighter stars
+      c: (Math.random() < 0.85) ? [1, 1, 1] : [0, 1, 1] // mostly white, some cyan
+    });
+  }
+})();
+
+// choose sky bands (top -> horizon) and how strongly stars show, for a given time
+function skyForTime (t) {
+  // deep night
+  if (t < riseT - TWILIGHT || t > setT + TWILIGHT)
+    return { bands: null, stars: 1 };
+  // dawn twilight
+  if (t < riseT)
+    return { bands: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]], stars: (riseT - t) / TWILIGHT };
+  // just after sunrise - warm glow
+  if (t < riseT + GOLDEN)
+    return { bands: [[0, 0, 1], [0, 1, 1], [1, 1, 0]], stars: 0 };
+  // dusk twilight
+  if (t > setT)
+    return { bands: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]], stars: (t - setT) / TWILIGHT };
+  // just before sunset - warm glow
+  if (t > setT - GOLDEN)
+    return { bands: [[0, 0, 1], [1, 0, 1], [1, 1, 0]], stars: 0 };
+  // daytime: higher sun = deeper blue up top, lighter cyan near the horizon
+  const a = Math.sin(Math.PI * (t - riseT) / (setT - riseT)); // 0 at horizon, 1 at noon
+  if (a > 0.6) return { bands: [[0, 0, 1], [0, 0, 1], [0, 1, 1]], stars: 0 };
+  return { bands: [[0, 0, 1], [0, 1, 1], [0, 1, 1]], stars: 0 };
+}
+
+// y of the (tilted) horizon at the left and right edges - matches drawSinuses()
+function horizonYs () {
+  return [seaLevel(sunrise.getHours()), seaLevel(sunset.getHours())];
+}
+
+function drawSky () {
+  const now = new Date();
+  const t = now.getHours() + now.getMinutes() / 60;
+  const sky = skyForTime(t);
+  const hy = horizonYs();
+  const sl0 = hy[0], sl1 = hy[1];
+
+  if (sky.bands) {
+    const hiHorizon = Math.min(sl0, sl1); // highest point of the horizon line
+    const n = sky.bands.length;
+    const bh = (hiHorizon - skyTop) / n;
+    for (let k = 0; k < n; k++) {
+      const c = sky.bands[k];
+      g.setColor(c[0], c[1], c[2]);
+      g.fillRect(0, skyTop + k * bh, w, skyTop + (k + 1) * bh);
+    }
+    // let the warmest band hug the horizon between its high and low points
+    const last = sky.bands[n - 1];
+    g.setColor(last[0], last[1], last[2]);
+    g.fillRect(0, hiHorizon, w, Math.max(sl0, sl1) + 2);
+  }
+
+  // sea/ground below the horizon stays black (also crisps up the horizon edge)
+  g.setColor(0, 0, 0);
+  g.fillPoly([0, sl0, w, sl1, w, h, 0, h]);
+
+  return sky.stars;
+}
+
+function drawStars (level) {
+  if (level <= 0) return;
+  const hy = horizonYs();
+  const sl0 = hy[0], sl1 = hy[1];
+  for (const s of stars) {
+    if (s.thr > level) continue;                 // fade in as it gets darker
+    const horizon = sl0 + (sl1 - sl0) * s.x / w;
+    if (s.y > horizon - 2) continue;             // keep them up in the sky
+    g.setColor(s.c[0], s.c[1], s.c[2]);
+    if (s.big) {
+      g.fillRect(s.x - 1, s.y, s.x + 1, s.y);
+      g.fillRect(s.x, s.y - 1, s.x, s.y + 1);
+    } else {
+      g.fillRect(s.x, s.y, s.x, s.y);
+    }
+  }
+}
+// ---- end additions ----
+
 function renderScreen () {
   const now = new Date();
   g.setColor(0, 0, 0);
   g.fillRect(0, 30, w, h);
   realPos = xfromTime(now.getHours() + now.getMinutes() / 60);
   g.setFontAlign(-1, -1, 0);
+
+  const starLevel = drawSky();
+  drawStars(starLevel);
 
   Bangle.drawWidgets();
 
