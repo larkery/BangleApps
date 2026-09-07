@@ -22,20 +22,24 @@ function loadNextAppointment () {
   try {
     const events = require('Storage').readJSON('android.calendar.json', 1) || [];
     const nowSec = Date.now() / 1000;
-    let best = null;
+    let bestTimed = null;
+    let bestAllDay = null;
     for (const e of events) {
-      // e.timestamp is start time in seconds; skip past events
       if (!e.timestamp) continue;
       const end = e.timestamp + (e.durationInSeconds || 0);
-      if (end < nowSec) continue;             // already ended
-      //if (e.timestamp < nowSec) continue;     // in progress — skip; use if you prefer
-      if (!best || e.timestamp > best.timestamp) best = e;
+      if (end < nowSec) continue;
+      if (e.allDay) {
+        if (!bestAllDay || e.timestamp < bestAllDay.timestamp) bestAllDay = e;
+      } else {
+        if (!bestTimed || e.timestamp < bestTimed.timestamp) bestTimed = e;
+      }
     }
+    const best = bestTimed || bestAllDay;
     if (!best) return null;
     return {
       msg: best.title || best.description || 'Event',
       when: new Date(best.timestamp * 1000),
-      allDay : best.allDay
+      allDay: best.allDay
     };
   } catch (e) {
     return null;
