@@ -6,7 +6,6 @@ const LOCATION_FILE = 'mylocation.json';
 
 Bangle.setUI('clock');
 Bangle.loadWidgets();
-
 // requires the myLocation app
 function loadLocation () {
   try {
@@ -21,7 +20,22 @@ const lon = latlon.lon || 2.168;
 
 /**
  *	Sunrise/sunset script. By Matt Kane.
- *  Copyright © 2012 Triggertrap Ltd. LGPL 2.1+
+ *
+ *  Based loosely and indirectly on Kevin Boone's SunTimes Java implementation
+ *  of the US Naval Observatory's algorithm.
+ *
+ *  Copyright © 2012 Triggertrap Ltd. All rights reserved.
+ *
+ * This library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General
+ * Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option)
+ * any later version.
+ *
+ * This library is distributed in the hope that it will be useful,but WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
+ * details.
+ * You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA,
+ * or connect to: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
  */
 
 Date.prototype.sunrise = function (latitude, longitude, zenith) {
@@ -33,11 +47,25 @@ Date.prototype.sunset = function (latitude, longitude, zenith) {
 };
 
 Date.prototype.sunriseSet = function (latitude, longitude, sunrise, zenith) {
-  if (!zenith) zenith = 90.8333;
+  if (!zenith) {
+    zenith = 90.8333;
+  }
 
   const hoursFromMeridian = longitude / Date.DEGREES_PER_HOUR;
   const dayOfYear = this.getDayOfYear();
   let approxTimeOfEventInDays;
+  let sunMeanAnomaly;
+  let sunTrueLongitude;
+  let ascension;
+  let rightAscension;
+  let lQuadrant;
+  let raQuadrant;
+  let sinDec;
+  let cosDec;
+  let localHourAngle;
+  let localHour;
+  let localMeanTime;
+  let time;
 
   if (sunrise) {
     approxTimeOfEventInDays = dayOfYear + ((6 - hoursFromMeridian) / 24);
@@ -45,34 +73,42 @@ Date.prototype.sunriseSet = function (latitude, longitude, sunrise, zenith) {
     approxTimeOfEventInDays = dayOfYear + ((18.0 - hoursFromMeridian) / 24);
   }
 
-  const sunMeanAnomaly = (0.9856 * approxTimeOfEventInDays) - 3.289;
+  sunMeanAnomaly = (0.9856 * approxTimeOfEventInDays) - 3.289;
 
-  let sunTrueLongitude = sunMeanAnomaly + (1.916 * Math.sinDeg(sunMeanAnomaly)) + (0.020 * Math.sinDeg(2 * sunMeanAnomaly)) + 282.634;
+  sunTrueLongitude = sunMeanAnomaly + (1.916 * Math.sinDeg(sunMeanAnomaly)) + (0.020 * Math.sinDeg(2 * sunMeanAnomaly)) + 282.634;
   sunTrueLongitude = Math.mod(sunTrueLongitude, 360);
 
-  const ascension = 0.91764 * Math.tanDeg(sunTrueLongitude);
-  let rightAscension = 360 / (2 * Math.PI) * Math.atan(ascension);
+  ascension = 0.91764 * Math.tanDeg(sunTrueLongitude);
+  rightAscension = 360 / (2 * Math.PI) * Math.atan(ascension);
   rightAscension = Math.mod(rightAscension, 360);
 
-  const lQuadrant = Math.floor(sunTrueLongitude / 90) * 90;
-  const raQuadrant = Math.floor(rightAscension / 90) * 90;
+  lQuadrant = Math.floor(sunTrueLongitude / 90) * 90;
+  raQuadrant = Math.floor(rightAscension / 90) * 90;
   rightAscension = rightAscension + (lQuadrant - raQuadrant);
   rightAscension /= Date.DEGREES_PER_HOUR;
 
-  const sinDec = 0.39782 * Math.sinDeg(sunTrueLongitude);
-  const cosDec = Math.cosDeg(Math.asinDeg(sinDec));
+  sinDec = 0.39782 * Math.sinDeg(sunTrueLongitude);
+  cosDec = Math.cosDeg(Math.asinDeg(sinDec));
   const cosLocalHourAngle = ((Math.cosDeg(zenith)) - (sinDec * (Math.sinDeg(latitude)))) / (cosDec * (Math.cosDeg(latitude)));
 
-  let localHourAngle = Math.acosDeg(cosLocalHourAngle);
-  if (sunrise) localHourAngle = 360 - localHourAngle;
+  localHourAngle = Math.acosDeg(cosLocalHourAngle);
 
-  const localHour = localHourAngle / Date.DEGREES_PER_HOUR;
-  const localMeanTime = localHour + rightAscension - (0.06571 * approxTimeOfEventInDays) - 6.622;
+  if (sunrise) {
+    localHourAngle = 360 - localHourAngle;
+  }
 
-  let time = localMeanTime - (longitude / Date.DEGREES_PER_HOUR);
+  localHour = localHourAngle / Date.DEGREES_PER_HOUR;
+
+  localMeanTime = localHour + rightAscension - (0.06571 * approxTimeOfEventInDays) - 6.622;
+
+  time = localMeanTime - (longitude / Date.DEGREES_PER_HOUR);
   time = Math.mod(time, 24);
 
   const midnight = new Date(0);
+  // midnight.setUTCFullYear(this.getUTCFullYear());
+  // midnight.setUTCMonth(this.getUTCMonth());
+  // midnight.setUTCDate(this.getUTCDate());
+
   const milli = midnight.getTime() + (time * 60 * 60 * 1000);
 
   return new Date(milli);
@@ -80,21 +116,46 @@ Date.prototype.sunriseSet = function (latitude, longitude, sunrise, zenith) {
 
 Date.DEGREES_PER_HOUR = 360 / 24;
 
+// Utility functions
+
 Date.prototype.getDayOfYear = function () {
   const onejan = new Date(this.getFullYear(), 0, 1);
-  return Math.ceil((this.getTime() - onejan.getTime()) / 86400000);
+  return Math.ceil((this - onejan) / 86400000);
 };
 
-Math.degToRad = function (num) { return num * Math.PI / 180; };
-Math.radToDeg = function (radians) { return radians * 180.0 / Math.PI; };
-Math.sinDeg = function (deg) { return Math.sin(deg * 2.0 * Math.PI / 360.0); };
-Math.acosDeg = function (x) { return Math.acos(x) * 360.0 / (2 * Math.PI); };
-Math.asinDeg = function (x) { return Math.asin(x) * 360.0 / (2 * Math.PI); };
-Math.tanDeg = function (deg) { return Math.tan(deg * 2.0 * Math.PI / 360.0); };
-Math.cosDeg = function (deg) { return Math.cos(deg * 2.0 * Math.PI / 360.0); };
+Math.degToRad = function (num) {
+  return num * Math.PI / 180;
+};
+
+Math.radToDeg = function (radians) {
+  return radians * 180.0 / Math.PI;
+};
+
+Math.sinDeg = function (deg) {
+  return Math.sin(deg * 2.0 * Math.PI / 360.0);
+};
+
+Math.acosDeg = function (x) {
+  return Math.acos(x) * 360.0 / (2 * Math.PI);
+};
+
+Math.asinDeg = function (x) {
+  return Math.asin(x) * 360.0 / (2 * Math.PI);
+};
+
+Math.tanDeg = function (deg) {
+  return Math.tan(deg * 2.0 * Math.PI / 360.0);
+};
+
+Math.cosDeg = function (deg) {
+  return Math.cos(deg * 2.0 * Math.PI / 360.0);
+};
+
 Math.mod = function (a, b) {
   let result = a % b;
-  if (result < 0) result += b;
+  if (result < 0) {
+    result += b;
+  }
   return result;
 };
 
@@ -108,6 +169,8 @@ const oy = h / 1.7;
 let sunRiseX = 0;
 let sunSetX = 0;
 const sinStep = 13;
+
+let pos = 0;
 const r = 10;
 
 function formatAsTime (hour, minute) {
@@ -115,24 +178,23 @@ function formatAsTime (hour, minute) {
          ':' + ((minute < 10) ? '0' : '') + (0 | minute);
 }
 
-function currentSunX () {
-  const now = new Date();
-  return xfromTime(now.getHours() + now.getMinutes() / 60);
-}
-
 function drawSinuses () {
   let x = 0;
+
   g.setColor(1, 1, 1);
   let y = ypos(x);
   while (x < w) {
     const y2 = ypos(x + sinStep);
     g.drawLine(x, y, x + sinStep, y2);
     y = y2;
-    x += sinStep;
+    x += sinStep; // no need to draw all steps
   }
 
+  // sea level line
   const sl0 = seaLevel(sunrise.getHours());
   const sl1 = seaLevel(sunset.getHours());
+  sunRiseX = xfromTime(sunrise.getHours() + sunrise.getMinutes() / 60);
+  sunSetX = xfromTime(sunset.getHours() + sunset.getMinutes() / 60);
   g.setColor(0, 0.5, 1);
   g.drawLine(0, sl0, w, sl1);
   g.drawLine(0, sl0 + 1, w, sl1 + 1);
@@ -146,14 +208,18 @@ function drawTimes () {
 }
 
 function drawGlow () {
-  const x = currentSunX();
+  const now = new Date();
+  pos = xfromTime(now.getHours() + now.getMinutes() / 60);
+  const x = pos;
   const y = ypos(x);
 
   g.setColor(0.2, 0.2, 0);
+  // wide glow
   if (x > sunRiseX && x < sunSetX) {
     g.fillCircle(x, y, r + 20);
     g.setColor(0.5, 0.5, 0);
   }
+  // smol glow
   g.fillCircle(x, y, r + 8);
 }
 
@@ -162,7 +228,7 @@ function seaLevel (hour) {
 }
 
 function ypos (x) {
-  return oy + (32 * Math.sin(((x + sunRiseX - 12) / w) * 6.28));
+  return oy + (32 * Math.sin(((x + sunRiseX - 12) / w) * 6.28 ));
 }
 
 function xfromTime (t) {
@@ -170,7 +236,9 @@ function xfromTime (t) {
 }
 
 function drawBall () {
-  const x = currentSunX();
+  const now = new Date();
+  pos = xfromTime(now.getHours() + now.getMinutes() / 60);
+  const x = pos;
   const y = ypos(x);
 
   if (x > sunRiseX && x < sunSetX) {
@@ -191,14 +259,14 @@ function drawClock () {
   g.setFont('Vector', 30);
   g.setColor(1, 1, 1);
   g.drawString(formatAsTime(hours, mins), w / 1.9, 32);
-
+  // day-month
   const mo = now.getMonth() + 1;
   const da = now.getDate();
   g.setFont('6x8', 2);
   g.drawString('' + da + '/' + mo, 5, 30);
 }
 
-// ---- sky colour + stars ----
+// ---- sky colour + stars additions ----
 const skyTop = 30;
 const TWILIGHT = 0.9;
 const GOLDEN = 1.2;
@@ -270,8 +338,7 @@ function drawStars (level) {
   if (level <= 0) return;
   const hy = horizonYs();
   const sl0 = hy[0], sl1 = hy[1];
-  for (let i = 0; i < stars.length; i++) {
-    const s = stars[i];
+  for (const s of stars) {
     if (s.thr > level) continue;
     const horizon = sl0 + (sl1 - sl0) * s.x / w;
     if (s.y > horizon - 2) continue;
@@ -284,6 +351,7 @@ function drawStars (level) {
     }
   }
 }
+// ---- end additions ----
 
 function renderScreen () {
   g.setColor(0, 0, 0);
@@ -302,9 +370,9 @@ function renderScreen () {
   drawBall();
 }
 
-function renderAndQueue () {
-  renderScreen();
+function renderAndQueue() {
   setTimeout(renderAndQueue, 60000 - (Date.now() % 60000));
+  renderScreen();
 }
 
 function main () {
