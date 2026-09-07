@@ -20,23 +20,21 @@ const lon = latlon.lon || 2.168;
 
 function loadNextAppointment () {
   try {
-    const sched = require('sched');
-    const now = Date.now();
-    const alarms = sched.getAlarms().filter(a => a.on && !a.hidden);
+    const events = require('Storage').readJSON('android.calendar.json', 1) || [];
+    const nowSec = Date.now() / 1000;
     let best = null;
-    let bestT = Infinity;
-    for (const a of alarms) {
-      const t = sched.getTimeToAlarm(a);
-      if (t && t > 0 && t < bestT) {
-        bestT = t;
-        best = a;
-      }
+    for (const e of events) {
+      // e.timestamp is start time in seconds; skip past events
+      if (!e.timestamp) continue;
+      const end = e.timestamp + (e.durationInSeconds || 0);
+      if (end < nowSec) continue;             // already ended
+      //if (e.timestamp < nowSec) continue;     // in progress — skip; use if you prefer
+      if (!best || e.timestamp < best.timestamp) best = e;
     }
     if (!best) return null;
-    const when = new Date(now + bestT);
     return {
-      msg: best.msg || best.appt || 'Appt',
-      when: when
+      msg: best.title || best.description || 'Event',
+      when: new Date(best.timestamp * 1000)
     };
   } catch (e) {
     return null;
@@ -247,32 +245,24 @@ function drawTimes () {
   }
 }
 
-
 function drawGlow () {
   const now = new Date();
   pos = xfromTime(now.getHours() + now.getMinutes() / 60);
   const x = pos;
   const y = ypos(x);
 
-  // compute horizon at this x (interpolate between sl0 and sl1)
-  const sl0 = seaLevel(sunrise.getHours());
-  const sl1 = seaLevel(sunset.getHours());
-  const horizonY = sl0 + (sl1 - sl0) * x / w;
-
-  // clip drawing so halo doesn't extend below the horizon line
-  g.setClipRect(0, 0, w - 1, Math.max(0, Math.floor(horizonY)));
-
   g.setColor(0.2, 0.2, 0);
-  // wide glow
   if (x > sunRiseX && x < sunSetX) {
     g.fillCircle(x, y, r + 20);
     g.setColor(0.5, 0.5, 0);
   }
-  // smol glow
   g.fillCircle(x, y, r + 8);
 
-  // reset clip
-  g.setClipRect(0, 0, w - 1, h - 1);
+  // mask below horizon by repainting the ground polygon in black
+  const sl0 = seaLevel(sunrise.getHours());
+  const sl1 = seaLevel(sunset.getHours());
+  g.setColor(0, 0, 0);
+  g.fillPoly([0, sl0, w, sl1, w, h, 0, h]);
 }
 
 
