@@ -318,7 +318,7 @@ function drawClock () {
     nextSun = sunset; label = '\u2193'; // down arrow = sunset
   } else {
     // after today's sunset — show tomorrow's sunrise
-    nextSun = new Date(new Date(nowMs + 86400000).sunrise(lat, lon));
+    nextSun = new Date(nowMs + 86400000).sunrise(lat, lon);
     label = '\u2191';
   }
   g.setFont('6x8', 2);
