@@ -213,6 +213,14 @@ function drawGlow () {
   const x = pos;
   const y = ypos(x);
 
+  // compute horizon at this x (interpolate between sl0 and sl1)
+  const sl0 = seaLevel(sunrise.getHours());
+  const sl1 = seaLevel(sunset.getHours());
+  const horizonY = sl0 + (sl1 - sl0) * x / w;
+
+  // clip drawing so halo doesn't extend below the horizon line
+  g.setClipRect(0, 0, w - 1, Math.max(0, Math.floor(horizonY)));
+
   g.setColor(0.2, 0.2, 0);
   // wide glow
   if (x > sunRiseX && x < sunSetX) {
@@ -221,7 +229,11 @@ function drawGlow () {
   }
   // smol glow
   g.fillCircle(x, y, r + 8);
+
+  // reset clip
+  g.setClipRect(0, 0, w - 1, h - 1);
 }
+
 
 function seaLevel (hour) {
   return ypos(xfromTime(hour));
