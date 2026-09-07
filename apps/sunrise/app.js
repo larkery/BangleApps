@@ -233,7 +233,20 @@ function drawTimes () {
   g.setFont('6x8', 2);
   g.drawString(formatAsTime(sunrise.getHours(), sunrise.getMinutes()), 10, h - 20);
   g.drawString(formatAsTime(sunset.getHours(), sunset.getMinutes()), w - 60, h - 20);
+
+  if (nextAppt) {
+    g.setFont('6x8', 1);
+    g.setColor(1, 1, 0);
+    const timeStr = formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes());
+    let msg = nextAppt.msg;
+    if (msg.length > 18) msg = msg.substr(0, 17) + '…';
+    const line = timeStr + ' ' + msg;
+    g.setFontAlign(0, -1, 0);
+    g.drawString(line, w / 2, h - 32);
+    g.setFontAlign(-1, -1, 0);
+  }
 }
+
 
 function drawGlow () {
   const now = new Date();
