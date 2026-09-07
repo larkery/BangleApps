@@ -234,8 +234,8 @@ function drawTimes () {
   g.drawString(formatAsTime(sunset.getHours(), sunset.getMinutes()), w - 60, h - 20);
 
   if (nextAppt) {
-    g.setFont('6x8', 1);
-    g.setColor(1, 1, 0);
+    g.setFont('6x8', 2);
+    g.setColor(1, 1, 1);
     
     const timeStr = nextAppt.allDay ? "" : (formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes()) + ' ');
     
