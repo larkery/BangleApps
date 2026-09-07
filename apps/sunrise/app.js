@@ -229,24 +229,22 @@ function drawSinuses () {
 
 function drawTimes () {
   g.setColor(1, 1, 1);
-  g.setFont('6x8', 2);
-  g.drawString(formatAsTime(sunrise.getHours(), sunrise.getMinutes()), 10, h - 20);
-  g.drawString(formatAsTime(sunset.getHours(), sunset.getMinutes()), w - 60, h - 20);
 
   if (nextAppt) {
     g.setFont('6x8', 2);
     g.setColor(1, 1, 1);
-    
+
     const timeStr = nextAppt.allDay ? "" : (formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes()) + ' ');
-    
+
     let msg = nextAppt.msg;
     if (msg.length > 18) msg = msg.substr(0, 17) + '…';
-    const line = timeStr  + msg;
+    const line = timeStr + msg;
     g.setFontAlign(0, -1, 0);
-    g.drawString(line, w / 2, h - 32);
+    g.drawString(line, w / 2, h - 20);
     g.setFontAlign(-1, -1, 0);
   }
 }
+
 
 function drawGlow () {
   const now = new Date();
@@ -310,6 +308,23 @@ function drawClock () {
   const da = now.getDate();
   g.setFont('6x8', 2);
   g.drawString('' + da + '/' + mo, 5, 30);
+
+  // Next sunrise or sunset, right-aligned under the time
+  const nowMs = now.getTime();
+  let nextSun, label;
+  if (nowMs < sunrise.getTime()) {
+    nextSun = sunrise; label = '\u2191'; // up arrow = sunrise
+  } else if (nowMs < sunset.getTime()) {
+    nextSun = sunset; label = '\u2193'; // down arrow = sunset
+  } else {
+    // after today's sunset — show tomorrow's sunrise
+    nextSun = new Date(new Date(nowMs + 86400000).sunrise(lat, lon));
+    label = '\u2191';
+  }
+  g.setFont('6x8', 2);
+  g.setFontAlign(1, -1, 0);
+  g.drawString(label + ' ' + formatAsTime(nextSun.getHours(), nextSun.getMinutes()), w - 5, 64);
+  g.setFontAlign(-1, -1, 0);
 }
 
 // ---- sky colour + stars additions ----
