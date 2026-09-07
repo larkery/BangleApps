@@ -171,7 +171,6 @@ let sunSetX = 0;
 const sinStep = 13;
 
 let pos = 0;
-let realTime = true;
 const r = 10;
 
 let frames = 0; // amount of pending frames to render (0 if none)
@@ -294,12 +293,11 @@ function drawClock () {
   g.setColor(realTime, 1, 1);
   g.drawString(formatAsTime(hours, mins), w / 1.9, 32);
   // day-month
-  if (realTime) {
     const mo = now.getMonth() + 1;
     const da = now.getDate();
     g.setFont('6x8', 2);
     g.drawString('' + da + '/' + mo, 5, 30);
-  }
+  
 }
 
 // ---- sky colour + stars additions ----
@@ -419,45 +417,9 @@ function renderScreen () {
   drawBall();
 }
 
-Bangle.on('drag', function (tap, top) {
-  if (tap.y < h / 3) {
-    curPos = pos;
-    initialAnimation();
-  } else {
-    pos = tap.x;
-    realTime = false;
-  }
-  renderScreen();
-});
-
 Bangle.on('lock', () => {
-  // TODO: render animation here
-  realTime = Bangle.isLocked();
   renderScreen();
 });
-
-function initialAnimationFrame () {
-  if (frames > 0) {
-    let distance = (realPos - curPos) / frames;
-    pos = curPos;
-    curPos += distance;
-    renderScreen();
-    frames--;
-    setTimeout(initialAnimationFrame, 50);
-  } else {
-    realTime = true;
-    renderScreen();
-  }
-}
-
-function initialAnimation () {
-  const now = new Date();
-  realPos = xfromTime(now.getHours() + now.getMinutes() / 60);
-  const distance = Math.abs(realPos - pos);
-  frames = distance / 16;
-  realTime = false;
-  initialAnimationFrame();
-}
 
 function renderAndQueue() {
   setTimeout(renderAndQueue, 60000 - (Date.now() % 60000));
