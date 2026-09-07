@@ -29,12 +29,13 @@ function loadNextAppointment () {
       const end = e.timestamp + (e.durationInSeconds || 0);
       if (end < nowSec) continue;             // already ended
       //if (e.timestamp < nowSec) continue;     // in progress — skip; use if you prefer
-      if (!best || e.timestamp < best.timestamp) best = e;
+      if (!best || e.timestamp > best.timestamp) best = e;
     }
     if (!best) return null;
     return {
       msg: best.title || best.description || 'Event',
-      when: new Date(best.timestamp * 1000)
+      when: new Date(best.timestamp * 1000),
+      allDay : best.allDay
     };
   } catch (e) {
     return null;
@@ -235,10 +236,12 @@ function drawTimes () {
   if (nextAppt) {
     g.setFont('6x8', 1);
     g.setColor(1, 1, 0);
-    const timeStr = formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes());
+    
+    const timeStr = nextAppt.allDay ? "" : (formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes()) + ' ');
+    
     let msg = nextAppt.msg;
     if (msg.length > 18) msg = msg.substr(0, 17) + '…';
-    const line = timeStr + ' ' + msg;
+    const line = timeStr  + msg;
     g.setFontAlign(0, -1, 0);
     g.drawString(line, w / 2, h - 32);
     g.setFontAlign(-1, -1, 0);
