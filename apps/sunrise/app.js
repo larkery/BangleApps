@@ -18,6 +18,34 @@ const latlon = loadLocation() || {};
 const lat = latlon.lat || 41.38;
 const lon = latlon.lon || 2.168;
 
+function loadNextAppointment () {
+  try {
+    const sched = require('sched');
+    const now = Date.now();
+    const alarms = sched.getAlarms().filter(a => a.on && !a.hidden);
+    let best = null;
+    let bestT = Infinity;
+    for (const a of alarms) {
+      const t = sched.getTimeToAlarm(a);
+      if (t && t > 0 && t < bestT) {
+        bestT = t;
+        best = a;
+      }
+    }
+    if (!best) return null;
+    const when = new Date(now + bestT);
+    return {
+      msg: best.msg || best.appt || 'Appt',
+      when: when
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+let nextAppt = loadNextAppointment();
+
+
 /**
  *	Sunrise/sunset script. By Matt Kane.
  *
