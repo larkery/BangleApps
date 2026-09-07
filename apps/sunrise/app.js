@@ -425,8 +425,10 @@ function renderScreen () {
 
 function renderAndQueue() {
   setTimeout(renderAndQueue, 60000 - (Date.now() % 60000));
+  nextAppt = loadNextAppointment();
   renderScreen();
 }
+
 
 function main () {
   sunRiseX = xfromTime(sunrise.getHours() + sunrise.getMinutes() / 60);
