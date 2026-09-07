@@ -294,7 +294,6 @@ function drawBall () {
   g.setColor(1, 1, 0);
   g.drawCircle(x, y, r);
 }
-
 function drawClock () {
   const now = new Date();
   const hours = now.getHours();
@@ -303,29 +302,44 @@ function drawClock () {
   g.setFont('Vector', 30);
   g.setColor(1, 1, 1);
   g.drawString(formatAsTime(hours, mins), w / 1.9, 32);
-  // day-month
   const mo = now.getMonth() + 1;
   const da = now.getDate();
   g.setFont('6x8', 2);
+  g.setFontAlign(-1, -1, 0);
   g.drawString('' + da + '/' + mo, 5, 30);
 
-  // Next sunrise or sunset, right-aligned under the time
+  // Next sunrise/sunset, under the date on the left
   const nowMs = now.getTime();
-  let nextSun, label;
+  let nextSun, up;
   if (nowMs < sunrise.getTime()) {
-    nextSun = sunrise; label = '\u2191'; // up arrow = sunrise
+    nextSun = sunrise; up = true;
   } else if (nowMs < sunset.getTime()) {
-    nextSun = sunset; label = '\u2193'; // down arrow = sunset
+    nextSun = sunset; up = false;
   } else {
-    // after today's sunset — show tomorrow's sunrise
     nextSun = new Date(nowMs + 86400000).sunrise(lat, lon);
-    label = '\u2191';
+    up = true;
   }
+
+  const ty = 50; // y position for sun time line
+  const ax = 5;  // arrow left x
+  const aw = 10; // arrow width
+  const ah = 12; // arrow height
+  g.setColor(1, 1, 0);
+  if (up) {
+    // triangle pointing up
+    g.fillPoly([ax + aw / 2, ty, ax, ty + ah, ax + aw, ty + ah]);
+  } else {
+    // triangle pointing down
+    g.fillPoly([ax, ty, ax + aw, ty, ax + aw / 2, ty + ah]);
+  }
+
+  g.setColor(1, 1, 1);
   g.setFont('6x8', 2);
-  g.setFontAlign(1, -1, 0);
-  g.drawString(label + ' ' + formatAsTime(nextSun.getHours(), nextSun.getMinutes()), w - 5, 64);
   g.setFontAlign(-1, -1, 0);
+  g.drawString(formatAsTime(nextSun.getHours(), nextSun.getMinutes()),
+               ax + aw + 4, ty);
 }
+
 
 // ---- sky colour + stars additions ----
 const skyTop = 30;
