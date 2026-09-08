@@ -26,8 +26,7 @@ function loadNextAppointment () {
     let bestAllDay = null;
     for (const e of events) {
       if (!e.timestamp) continue;
-      const end = e.timestamp + (e.durationInSeconds || 0);
-      if (end < nowSec) continue;
+      if (e.timestamp < nowSec) continue; // only future events
       if (e.allDay) {
         if (!bestAllDay || e.timestamp < bestAllDay.timestamp) bestAllDay = e;
       } else {
@@ -48,25 +47,9 @@ function loadNextAppointment () {
 
 let nextAppt = loadNextAppointment();
 
-
 /**
  *	Sunrise/sunset script. By Matt Kane.
- *
- *  Based loosely and indirectly on Kevin Boone's SunTimes Java implementation
- *  of the US Naval Observatory's algorithm.
- *
- *  Copyright © 2012 Triggertrap Ltd. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General
- * Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option)
- * any later version.
- *
- * This library is distributed in the hope that it will be useful,but WITHOUT ANY WARRANTY; without even the implied
- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
- * details.
- * You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA,
- * or connect to: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+ *  Copyright © 2012 Triggertrap Ltd. LGPL 2.1+
  */
 
 Date.prototype.sunrise = function (latitude, longitude, zenith) {
@@ -136,9 +119,9 @@ Date.prototype.sunriseSet = function (latitude, longitude, sunrise, zenith) {
   time = Math.mod(time, 24);
 
   const midnight = new Date(0);
-  // midnight.setUTCFullYear(this.getUTCFullYear());
-  // midnight.setUTCMonth(this.getUTCMonth());
-  // midnight.setUTCDate(this.getUTCDate());
+  midnight.setUTCFullYear(this.getUTCFullYear());
+  midnight.setUTCMonth(this.getUTCMonth());
+  midnight.setUTCDate(this.getUTCDate());
 
   const milli = midnight.getTime() + (time * 60 * 60 * 1000);
 
@@ -150,59 +133,47 @@ Date.DEGREES_PER_HOUR = 360 / 24;
 // Utility functions
 
 Date.prototype.getDayOfYear = function () {
-  const onejan = new Date(this.getFullYear(), 0, 1);
-  return Math.ceil((this - onejan) / 86400000);
+  const onejan = Date.UTC(this.getUTCFullYear(), 0, 1);
+  return Math.floor((this.getTime() - onejan) / 86400000) + 1;
 };
 
-Math.degToRad = function (num) {
-  return num * Math.PI / 180;
-};
-
-Math.radToDeg = function (radians) {
-  return radians * 180.0 / Math.PI;
-};
-
-Math.sinDeg = function (deg) {
-  return Math.sin(deg * 2.0 * Math.PI / 360.0);
-};
-
-Math.acosDeg = function (x) {
-  return Math.acos(x) * 360.0 / (2 * Math.PI);
-};
-
-Math.asinDeg = function (x) {
-  return Math.asin(x) * 360.0 / (2 * Math.PI);
-};
-
-Math.tanDeg = function (deg) {
-  return Math.tan(deg * 2.0 * Math.PI / 360.0);
-};
-
-Math.cosDeg = function (deg) {
-  return Math.cos(deg * 2.0 * Math.PI / 360.0);
-};
-
+Math.degToRad = function (num) { return num * Math.PI / 180; };
+Math.radToDeg = function (radians) { return radians * 180.0 / Math.PI; };
+Math.sinDeg = function (deg) { return Math.sin(deg * 2.0 * Math.PI / 360.0); };
+Math.acosDeg = function (x) { return Math.acos(x) * 360.0 / (2 * Math.PI); };
+Math.asinDeg = function (x) { return Math.asin(x) * 360.0 / (2 * Math.PI); };
+Math.tanDeg = function (deg) { return Math.tan(deg * 2.0 * Math.PI / 360.0); };
+Math.cosDeg = function (deg) { return Math.cos(deg * 2.0 * Math.PI / 360.0); };
 Math.mod = function (a, b) {
   let result = a % b;
-  if (result < 0) {
-    result += b;
-  }
+  if (result < 0) result += b;
   return result;
 };
-
-const sunrise = new Date().sunrise(lat, lon);
-const sunset = new Date().sunset(lat, lon);
 
 const w = g.getWidth();
 const h = g.getHeight();
 const oy = h / 1.7;
 
+let sunrise, sunset, riseT, setT;
 let sunRiseX = 0;
 let sunSetX = 0;
 const sinStep = 13;
 
 let pos = 0;
 const r = 10;
+
+let lastApptLoad = 0;
+let lastSunCompute = 0;
+
+function recomputeSun () {
+  const d = new Date();
+  sunrise = d.sunrise(lat, lon);
+  sunset  = d.sunset(lat, lon);
+  riseT = sunrise.getHours() + sunrise.getMinutes() / 60;
+  setT  = sunset.getHours()  + sunset.getMinutes()  / 60;
+  sunRiseX = xfromTime(riseT);
+  sunSetX  = xfromTime(setT);
+}
 
 function formatAsTime (hour, minute) {
   return '' + ((hour < 10) ? '0' : '') + (0 | hour) +
@@ -218,14 +189,11 @@ function drawSinuses () {
     const y2 = ypos(x + sinStep);
     g.drawLine(x, y, x + sinStep, y2);
     y = y2;
-    x += sinStep; // no need to draw all steps
+    x += sinStep;
   }
 
-  // sea level line
   const sl0 = seaLevel(sunrise.getHours());
   const sl1 = seaLevel(sunset.getHours());
-  sunRiseX = xfromTime(sunrise.getHours() + sunrise.getMinutes() / 60);
-  sunSetX = xfromTime(sunset.getHours() + sunset.getMinutes() / 60);
   g.setColor(0, 0.5, 1);
   g.drawLine(0, sl0, w, sl1);
   g.drawLine(0, sl0 + 1, w, sl1 + 1);
@@ -249,7 +217,6 @@ function drawTimes () {
   }
 }
 
-
 function drawGlow () {
   const now = new Date();
   pos = xfromTime(now.getHours() + now.getMinutes() / 60);
@@ -263,13 +230,11 @@ function drawGlow () {
   }
   g.fillCircle(x, y, r + 8);
 
-  // mask below horizon by repainting the ground polygon in black
   const sl0 = seaLevel(sunrise.getHours());
   const sl1 = seaLevel(sunset.getHours());
   g.setColor(0, 0, 0);
   g.fillPoly([0, sl0, w, sl1, w, h, 0, h]);
 }
-
 
 function seaLevel (hour) {
   return ypos(xfromTime(hour));
@@ -298,6 +263,7 @@ function drawBall () {
   g.setColor(1, 1, 0);
   g.drawCircle(x, y, r);
 }
+
 function drawClock () {
   const now = new Date();
   const hours = now.getHours();
@@ -312,29 +278,24 @@ function drawClock () {
   g.setFontAlign(-1, -1, 0);
   g.drawString('' + da + '/' + mo, 5, 30);
 
-  // Next sunrise/sunset, under the date on the left
   const nowFrac = now.getHours() + now.getMinutes() / 60;
-  const riseFrac = sunrise.getHours() + sunrise.getMinutes() / 60;
-  const setFrac = sunset.getHours() + sunset.getMinutes() / 60;
   let nextSun, up;
-  if (nowFrac < riseFrac) {
+  if (nowFrac < riseT) {
     nextSun = sunrise; up = true;
-  } else if (nowFrac < setFrac) {
+  } else if (nowFrac < setT) {
     nextSun = sunset; up = false;
   } else {
-    nextSun = sunrise; up = true; // tomorrow's sunrise ≈ today's
+    nextSun = sunrise; up = true;
   }
-  
-  const ty = 50; // y position for sun time line
-  const ax = 5;  // arrow left x
-  const aw = 10; // arrow width
-  const ah = 12; // arrow height
+
+  const ty = 50;
+  const ax = 5;
+  const aw = 10;
+  const ah = 12;
   g.setColor(1, 1, 0);
   if (up) {
-    // triangle pointing up
     g.fillPoly([ax + aw / 2, ty, ax, ty + ah, ax + aw, ty + ah]);
   } else {
-    // triangle pointing down
     g.fillPoly([ax, ty, ax + aw, ty, ax + aw / 2, ty + ah]);
   }
 
@@ -345,14 +306,10 @@ function drawClock () {
                ax + aw + 4, ty);
 }
 
-
-// ---- sky colour + stars additions ----
+// ---- sky colour + stars ----
 const skyTop = 30;
 const TWILIGHT = 0.9;
 const GOLDEN = 1.2;
-
-const riseT = sunrise.getHours() + sunrise.getMinutes() / 60;
-const setT = sunset.getHours() + sunset.getMinutes() / 60;
 
 const stars = [];
 (function () {
@@ -431,7 +388,6 @@ function drawStars (level) {
     }
   }
 }
-// ---- end additions ----
 
 function renderScreen () {
   g.setColor(0, 0, 0);
@@ -450,16 +406,24 @@ function renderScreen () {
   drawBall();
 }
 
-function renderAndQueue() {
+function renderAndQueue () {
   setTimeout(renderAndQueue, 60000 - (Date.now() % 60000));
-  nextAppt = loadNextAppointment();
+  const now = Date.now();
+  if (now - lastApptLoad > 15 * 60 * 1000) {
+    nextAppt = loadNextAppointment();
+    lastApptLoad = now;
+  }
+  if (now - lastSunCompute > 60 * 60 * 1000) {
+    recomputeSun();
+    lastSunCompute = now;
+  }
   renderScreen();
 }
 
-
 function main () {
-  sunRiseX = xfromTime(sunrise.getHours() + sunrise.getMinutes() / 60);
-  sunSetX = xfromTime(sunset.getHours() + sunset.getMinutes() / 60);
+  recomputeSun();
+  lastSunCompute = Date.now();
+  lastApptLoad = Date.now();
 
   g.setBgColor(0, 0, 0);
   g.clear();
