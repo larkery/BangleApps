@@ -313,17 +313,18 @@ function drawClock () {
   g.drawString('' + da + '/' + mo, 5, 30);
 
   // Next sunrise/sunset, under the date on the left
-  const nowMs = now.getTime();
+  const nowFrac = now.getHours() + now.getMinutes() / 60;
+  const riseFrac = sunrise.getHours() + sunrise.getMinutes() / 60;
+  const setFrac = sunset.getHours() + sunset.getMinutes() / 60;
   let nextSun, up;
-  if (nowMs < sunrise.getTime()) {
+  if (nowFrac < riseFrac) {
     nextSun = sunrise; up = true;
-  } else if (nowMs < sunset.getTime()) {
+  } else if (nowFrac < setFrac) {
     nextSun = sunset; up = false;
   } else {
-    nextSun = new Date(nowMs + 86400000).sunrise(lat, lon);
-    up = true;
+    nextSun = sunrise; up = true; // tomorrow's sunrise ≈ today's
   }
-
+  
   const ty = 50; // y position for sun time line
   const ax = 5;  // arrow left x
   const aw = 10; // arrow width
