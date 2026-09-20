@@ -1,0 +1,27 @@
+<html>
+<head>
+  <link rel="stylesheet" href="../../css/spectre.min.css">
+</head>
+<body style="padding:1em">
+  <p>Download your Mood Log data as CSV, or clear it from the watch.</p>
+  <button class="btn btn-primary" id="dl">Download CSV</button>
+  <button class="btn btn-error" id="del">Delete data from watch</button>
+  <script src="../../core/lib/interface.js"></script>
+  <script>
+    function onInit() {}
+    document.getElementById("dl").addEventListener("click", function() {
+      Util.showModal("Downloading...");
+      Util.readStorageFile("moodlog.csv", function(data) {
+        Util.hideModal();
+        if (!data || !data.length) { alert("No data on the watch yet."); return; }
+        Util.saveCSV("moodlog", data);
+      });
+    });
+    document.getElementById("del").addEventListener("click", function() {
+      if (!confirm("Delete all Mood Log data from the watch? Download it first.")) return;
+      Util.showModal("Deleting...");
+      Util.eraseStorageFile("moodlog.csv", function() { Util.hideModal(); alert("Deleted."); });
+    });
+  </script>
+</body>
+</html>

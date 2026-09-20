@@ -1,0 +1,2 @@
+0.01: First version
+0.02: Use Scheduler library instead of polling; sleep prompt at fixed delay after quiet hours

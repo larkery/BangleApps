@@ -1,0 +1,54 @@
+{
+  "id": "moodlog",
+  "name": "Mood Log",
+  "shortName": "Mood Log",
+  "version": "0.02",
+  "description": "Periodic check-ins: tap icons for water, coffee, mood, social contact and body, rate how things have been, plus a morning sleep rating. Logs to CSV.",
+  "icon": "app.png",
+  "type": "app",
+  "tags": "health,tool",
+  "supports": [
+    "BANGLEJS2"
+  ],
+  "readme": "README.md",
+  "interface": "interface.html",
+  "allow_emulator": true,
+  "storage": [
+    {
+      "name": "moodlog.app.js",
+      "url": "app.js"
+    },
+    {
+      "name": "moodlog.boot.js",
+      "url": "boot.js"
+    },
+    {
+      "name": "moodlog",
+      "url": "lib.js"
+    },
+    {
+      "name": "moodlog.settings.js",
+      "url": "settings.js"
+    },
+    {
+      "name": "moodlog.img",
+      "url": "app-icon.js",
+      "evaluate": true
+    }
+  ],
+  "data": [
+    {
+      "name": "moodlog.json"
+    },
+    {
+      "name": "moodlog.state.json"
+    },
+    {
+      "name": "moodlog.csv",
+      "storageFile": true
+    }
+  ],
+  "dependencies": {
+    "scheduler": "type"
+  }
+}
