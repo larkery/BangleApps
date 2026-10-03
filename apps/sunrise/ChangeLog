@@ -6,3 +6,9 @@
 0.06: Draw the screen exactly on the minute boundary
 0.07: Minor code improvements
 0.08: Minor code improvements
+0.21: Next event wraps and left-aligns when long, uses a smaller font, only
+      shows events within a day and marks tomorrow's with "Tmw".
+      Show weather (clouds/rain/snow/storm/fog) in the sky and the temperature.
+      Smaller sun, especially below the horizon. Outlined text for readability.
+      Sun path peaks at solar noon with a flat horizon that it crosses at
+      sunrise/sunset. Don't redraw while the screen is off.

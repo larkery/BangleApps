@@ -1,14 +1,22 @@
 # Mood Log
 
-Prompts you through the day to tap what's been true **since the last check-in**, then rate how things have been overall. Once each morning it asks how you slept.
+Prompts you through the day to tap what's been true **since the last check-in**. Once each morning it asks how you slept.
 
 ## Using it
 
-- **Grid:** tap icons to toggle them (green = yes). Tap the blue centre tick to submit.
-- **Rating:** tap Good / OK / Not good.
-- **Button:** skips. On the grid it logs a `skipped` row. On the rating screen it saves the grid without a rating.
-- **Timeout:** if you don't answer within the set time, a `missed` row is logged.
-- **Log now:** open Mood Log from the launcher at any time. This logs a `manual` row and restarts the timer.
+- **Grid:** tap icons to toggle them (green = yes). Water and coffee show how many times you've logged them today.
+
+  | | | |
+  |---|---|---|
+  | Water | Coffee | Food |
+  | Spoke | Moved | Outside |
+  | Sad | Frustrated | Happy |
+
+- **Detail:** press and hold Sad, Frustrated or Happy to open a second grid: Pain, Tired, Fear/anxiety, Joy, Equanimity, Connection, Loneliness, Self-esteem. Tap Back to return. The corner of the mood icons turns yellow when anything on this grid is set.
+- **Button:** saves. On the sleep screen it skips.
+- **Sleep:** tap Good / OK / Not good.
+- **Timeout:** if you don't answer in time, anything you toggled is saved. If nothing was toggled, a `missed` row is logged.
+- **Log now:** open Mood Log from the launcher at any time. This logs a `manual` row and restarts the timer. If you press the button with nothing toggled, nothing is logged.
 
 ## When it prompts
 
@@ -20,18 +28,20 @@ Prompts are scheduled with the **Scheduler** (`sched`) library, one at a time: e
 
 ## CSV columns
 
+Data goes to `moodlog2.csv`. Version 0.02 and earlier wrote `moodlog.csv`, which uses different columns. It's left in place and can still be downloaded.
+
 | column | meaning |
 |---|---|
-| schema | format version (1) |
-| type | checkin, manual, missed, skipped, sleep, sleep_missed, sleep_skipped |
+| schema | format version (2) |
+| type | checkin, manual, missed, sleep, sleep_missed, sleep_skipped |
 | time | local time with UTC offset |
 | unix | seconds since epoch |
 | latency_s | seconds from buzz to answer (blank for manual/missed) |
-| water … body_ok | 1/0, blank if not answered |
-| overall | 2 good, 1 OK, 0 not good, blank if skipped |
-| sleep | same scale, sleep rows only |
+| water, coffee, food, spoke, moved, outside, sad, frustrated, happy | main grid: 1/0, blank if not answered |
+| pain, tired, fear_anxiety, joy, equanimity, connection, loneliness, self_esteem | detail grid: 1/0, blank if not answered |
+| sleep | 2 good, 1 OK, 0 not good, sleep rows only |
 
-The window for each answer runs from the previous *answered* row. Missed and skipped rows don't reset it.
+The window for each answer runs from the previous *answered* row. Missed rows don't reset it.
 
 ## Install
 
@@ -51,6 +61,6 @@ The window for each answer runs from the previous *answered* row. Missed and ski
 Also write a file called `moodlog.info` containing:
 `{"id":"moodlog","name":"Mood Log","src":"moodlog.app.js","icon":"moodlog.img"}`
 
-The icon is optional. Reboot the watch afterwards. To get your data, download `moodlog.csv` from the IDE's Storage menu.
+The icon is optional. Reboot the watch afterwards. To get your data, download `moodlog2.csv` from the IDE's Storage menu.
 
 If you uninstall Mood Log, also delete its entry from `sched.json` (or reinstall and uninstall the Scheduler), or the leftover alarm will throw an error once.

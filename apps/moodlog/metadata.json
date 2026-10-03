@@ -2,8 +2,8 @@
   "id": "moodlog",
   "name": "Mood Log",
   "shortName": "Mood Log",
-  "version": "0.02",
-  "description": "Periodic check-ins: tap icons for water, coffee, mood, social contact and body, rate how things have been, plus a morning sleep rating. Logs to CSV.",
+  "version": "0.03",
+  "description": "Periodic check-ins: tap icons for water, coffee, food, social contact, movement and mood (hold a mood for more detail), plus a morning sleep rating. Logs to CSV.",
   "icon": "app.png",
   "type": "app",
   "tags": "health,tool",
@@ -45,6 +45,10 @@
     },
     {
       "name": "moodlog.csv",
+      "storageFile": true
+    },
+    {
+      "name": "moodlog2.csv",
       "storageFile": true
     }
   ],

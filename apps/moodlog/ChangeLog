@@ -1,2 +1,3 @@
 0.01: First version
 0.02: Use Scheduler library instead of polling; sleep prompt at fixed delay after quiet hours
+0.03: New grid layout (incl. food and outside) with detailed emotions (press and hold), button saves, water/coffee daily counts, no overall rating. Logs to moodlog2.csv (schema 2)

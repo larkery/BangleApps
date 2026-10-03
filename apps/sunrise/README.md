@@ -8,7 +8,9 @@ this into account before complaining :-)
 
 * Requires to configure the location in Settings -> Apps -> My Location
 * Shows sea level and make the sun/moon glow depending on the x position
-* The sinus is fixed, so the sea level is curved to match the sunrise/sunset positions)
+* The sun's path peaks at solar noon, and the horizon is placed so the sun crosses it at sunrise and sunset
+* Shows the next calendar event (synced by Gadgetbridge) starting within the next day along the bottom
+* If the weather app has data, shows clouds/rain/snow/fog in the sky and the temperature
 
 ## TODO
 

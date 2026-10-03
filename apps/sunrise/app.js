@@ -22,55 +22,104 @@ const lon = latlon.lon || 2.168;
 /* ---------------------------------------------------------------------------
  *  Next-appointment cache
  *  Reading + parsing the calendar JSON is the single most expensive thing this
- *  watch face does, so we do NOT do it every minute. We rescan only when:
- *    - we've never scanned, or
- *    - the cached appointment has now ended (a new "next" is due), or
- *    - it's been longer than APPT_RESCAN_MS since the last scan (to pick up a
- *      fresh calendar sync from the phone).
+ *  watch face does, so we do NOT do it every minute. Every APPT_RESCAN_MS we
+ *  pull out the handful of events that could become "next" before the
+ *  following scan, and each minute we just pick from that short list. That
+ *  way the one-day look-ahead window slides smoothly between scans.
  * ------------------------------------------------------------------------- */
-const APPT_RESCAN_MS = 10 * 60 * 1000; // 10 minutes
-let nextAppt = null;
+const APPT_RESCAN_MS = 10 * 60 * 1000;      // 10 minutes
+const APPT_WINDOW_MS = 24 * 60 * 60 * 1000; // only show events starting within a day
+let appts = [];
 let apptScanAt = 0;
 
-function loadNextAppointment () {
+function scanAppointments () {
+  const list = [];
   try {
     const events = require('Storage').readJSON('android.calendar.json', 1) || [];
     const nowSec = Date.now() / 1000;
-    let bestTimed = null;
-    let bestAllDay = null;
+    const latest = nowSec + (APPT_WINDOW_MS + APPT_RESCAN_MS) / 1000;
     for (const e of events) {
-      if (!e.timestamp) continue;
+      if (!e.timestamp || e.timestamp > latest) continue;
       const end = e.timestamp + (e.durationInSeconds || 0);
-      if (end < nowSec) continue;
-      if (e.allDay) {
-        if (!bestAllDay || e.timestamp < bestAllDay.timestamp) bestAllDay = e;
-      } else {
-        if (!bestTimed || e.timestamp < bestTimed.timestamp) bestTimed = e;
-      }
+      if (end <= nowSec) continue;
+      list.push({
+        msg: e.title || e.description || 'Event',
+        start: e.timestamp * 1000,
+        end: end * 1000,
+        allDay: !!e.allDay
+      });
     }
-    const best = bestTimed || bestAllDay;
-    if (!best) return null;
+  } catch (e) { }
+  return list;
+}
+
+function refreshAppts () {
+  const now = Date.now();
+  if (apptScanAt === 0 || (now - apptScanAt) > APPT_RESCAN_MS) {
+    appts = scanAppointments();
+    apptScanAt = now;
+  }
+}
+
+// Earliest timed event that hasn't ended and starts within the window;
+// all-day events only if there's no timed one.
+function nextAppointment (nowMs) {
+  let bestTimed = null;
+  let bestAllDay = null;
+  for (const a of appts) {
+    if (a.end <= nowMs || a.start > nowMs + APPT_WINDOW_MS) continue;
+    if (a.allDay) {
+      if (!bestAllDay || a.start < bestAllDay.start) bestAllDay = a;
+    } else {
+      if (!bestTimed || a.start < bestTimed.start) bestTimed = a;
+    }
+  }
+  return bestTimed || bestAllDay;
+}
+
+/* ---------------------------------------------------------------------------
+ *  Weather, from the weather app's weather.json. Only re-read alongside the
+ *  calendar, and ignored once it's stale.
+ * ------------------------------------------------------------------------- */
+const WEATHER_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+let weather = null;
+
+// Turn an OpenWeatherMap condition code (or the text, if there's no code)
+// into what we draw: number of clouds, precipitation type and fog.
+function weatherScene (code, txt) {
+  txt = (txt || '').toLowerCase();
+  if (!code) {
+    if (txt.indexOf('thunder') >= 0) code = 200;
+    else if (txt.indexOf('snow') >= 0 || txt.indexOf('sleet') >= 0) code = 600;
+    else if (txt.indexOf('rain') >= 0 || txt.indexOf('shower') >= 0) code = 500;
+    else if (txt.indexOf('drizzle') >= 0) code = 300;
+    else if (txt.indexOf('fog') >= 0 || txt.indexOf('mist') >= 0 || txt.indexOf('haze') >= 0) code = 741;
+    else if (txt.indexOf('overcast') >= 0) code = 804;
+    else if (txt.indexOf('cloud') >= 0) code = 802;
+    else return null;
+  }
+  if (code < 300) return { clouds: 4, precip: 'rain', storm: true };
+  if (code < 400) return { clouds: 3, precip: 'drizzle' };
+  if (code < 600) return { clouds: 4, precip: 'rain' };
+  if (code < 700) return { clouds: 4, precip: 'snow' };
+  if (code < 800) return { clouds: 0, fog: true };
+  if (code === 800) return null;
+  return { clouds: Math.min(code - 800, 4) };
+}
+
+function loadWeather () {
+  try {
+    const json = require('Storage').readJSON('weather.json', 1);
+    const wx = json && json.weather;
+    if (!wx || (wx.time && Date.now() - wx.time > WEATHER_MAX_AGE_MS)) return null;
     return {
-      msg: best.title || best.description || 'Event',
-      when: new Date(best.timestamp * 1000),
-      allDay: best.allDay,
-      endMs: (best.timestamp + (best.durationInSeconds || 0)) * 1000
+      scene: weatherScene(wx.code, wx.txt),
+      temp: (wx.temp !== undefined) ? wx.temp - 273.15 : undefined // stored in Kelvin
     };
   } catch (e) {
     return null;
   }
 }
-
-function refreshAppt () {
-  const now = Date.now();
-  if (apptScanAt === 0 ||
-      (now - apptScanAt) > APPT_RESCAN_MS ||
-      (nextAppt && nextAppt.endMs <= now)) {
-    nextAppt = loadNextAppointment();
-    apptScanAt = now;
-  }
-}
-
 
 /**
  *	Sunrise/sunset script. By Matt Kane.
@@ -219,9 +268,11 @@ Math.mod = function (a, b) {
 const w = g.getWidth();
 const h = g.getHeight();
 const oy = h / 1.7;
+const amp = 32;    // height of the sun's daily sine path
 const skyTop = 30;
-const sinStep = 13;
-const r = 10;
+const sinStep = 11;
+const rUp = 8;     // sun radius above the horizon
+const rDown = 5;   // ...and below it
 
 const TWILIGHT = 0.9;
 const GOLDEN = 1.2;
@@ -230,11 +281,16 @@ const GOLDEN = 1.2;
  *  Per-day sun state. Everything here depends only on the date and the
  *  location, so it's computed once at startup and again only when the day
  *  rolls over (see tick()), instead of being recomputed on every frame.
+ *
+ *  The sun's path peaks at solar noon (midway between sunrise and sunset),
+ *  and since it's symmetric the horizon is flat and crosses the path exactly
+ *  at sunrise and sunset - so long summer days give a high arc, short winter
+ *  days a shallow one.
  * ------------------------------------------------------------------------- */
 let sunrise, sunset;
-let sunRiseX, sunSetX;
+let sunRiseX, sunSetX, noonX;
 let riseT, setT;
-let SL0, SL1;      // sea-level y at sunrise / sunset x (horizon endpoints)
+let horizon;       // y of the horizon
 let sunDay = -1;   // UTC day index the above were computed for
 
 function xfromTime (t) {
@@ -242,11 +298,7 @@ function xfromTime (t) {
 }
 
 function ypos (x) {
-  return oy + (32 * Math.sin(((x + sunRiseX - 12) / w) * 6.28));
-}
-
-function seaLevel (hour) {
-  return ypos(xfromTime(hour));
+  return oy - amp * Math.cos(((x - noonX) / w) * 2 * Math.PI);
 }
 
 function computeSun () {
@@ -255,10 +307,14 @@ function computeSun () {
   sunset = d.sunset(lat, lon);
   riseT = sunrise.getHours() + sunrise.getMinutes() / 60;
   setT = sunset.getHours() + sunset.getMinutes() / 60;
-  sunRiseX = xfromTime(riseT);   // ypos()/seaLevel() below rely on this
+  sunRiseX = xfromTime(riseT);
   sunSetX = xfromTime(setT);
-  SL0 = seaLevel(sunrise.getHours());
-  SL1 = seaLevel(sunset.getHours());
+  noonX = (sunRiseX + sunSetX) / 2;
+  horizon = Math.round(ypos(sunRiseX));
+  if (!(horizon > 0)) { // polar day/night: sunrise is NaN, fall back to noon at 12
+    noonX = w / 2;
+    horizon = oy;
+  }
   sunDay = Math.floor(d.getTime() / 86400000);
 }
 
@@ -268,7 +324,7 @@ const stars = [];
   for (let i = 0; i < 45; i++) {
     stars.push({
       x: (Math.random() * w) | 0,
-      y: (skyTop + Math.random() * (oy - skyTop)) | 0,
+      y: (skyTop + Math.random() * (oy + amp / 2 - skyTop)) | 0,
       thr: Math.random(),
       big: Math.random() < 0.15,
       c: (Math.random() < 0.85) ? [1, 1, 1] : [0, 1, 1]
@@ -276,9 +332,26 @@ const stars = [];
   }
 })();
 
+// Fixed cloud positions [x, y, scale], in the order they get added as the
+// sky gets cloudier. Kept low in the sky, under the text where possible, and
+// clipped to the horizon.
+const CLOUDS = [[40, 76, 1], [118, 80, 1.1], [86, 71, 0.7], [158, 92, 0.8]];
+
 function formatAsTime (hour, minute) {
   return '' + ((hour < 10) ? '0' : '') + (0 | hour) +
          ':' + ((minute < 10) ? '0' : '') + (0 | minute);
+}
+
+// Draw text with a 1px black outline so it stays readable over the sky,
+// clouds and rain.
+function drawOutlined (str, x, y) {
+  g.setColor(0, 0, 0);
+  g.drawString(str, x - 1, y);
+  g.drawString(str, x + 1, y);
+  g.drawString(str, x, y - 1);
+  g.drawString(str, x, y + 1);
+  g.setColor(1, 1, 1);
+  g.drawString(str, x, y);
 }
 
 function skyForTime (t) {
@@ -297,43 +370,93 @@ function skyForTime (t) {
   return { bands: [[0, 0, 1], [0, 1, 1], [0, 1, 1]], stars: 0 };
 }
 
-function drawSky (t) {
-  const sky = skyForTime(t);
-
+function drawSky (sky) {
   if (sky.bands) {
-    const hiHorizon = Math.min(SL0, SL1);
     const n = sky.bands.length;
-    const bh = (hiHorizon - skyTop) / n;
+    const bh = (horizon - skyTop) / n;
     for (let k = 0; k < n; k++) {
       const c = sky.bands[k];
       g.setColor(c[0], c[1], c[2]);
       g.fillRect(0, skyTop + k * bh, w, skyTop + (k + 1) * bh);
     }
-    const last = sky.bands[n - 1];
-    g.setColor(last[0], last[1], last[2]);
-    g.fillRect(0, hiHorizon, w, Math.max(SL0, SL1) + 2);
   }
+  drawGround();
+}
 
+function drawGround () {
   g.setColor(0, 0, 0);
-  g.fillPoly([0, SL0, w, SL1, w, h, 0, h]);
-
-  return sky.stars;
+  g.fillRect(0, horizon, w, h);
 }
 
 function drawStars (level) {
   if (level <= 0) return;
   for (const s of stars) {
-    if (s.thr > level) continue;
-    const horizon = SL0 + (SL1 - SL0) * s.x / w;
-    if (s.y > horizon - 2) continue;
+    if (s.thr > level || s.y > horizon - 3) continue;
     g.setColor(s.c[0], s.c[1], s.c[2]);
     if (s.big) {
       g.fillRect(s.x - 1, s.y, s.x + 1, s.y);
       g.fillRect(s.x, s.y - 1, s.x, s.y + 1);
     } else {
-      g.fillRect(s.x, s.y, s.x, s.y);
+      g.setPixel(s.x, s.y);
     }
   }
+}
+
+function drawCloud (x, y, s, dark) {
+  g.setColor(0, 0, dark ? 1 : 0.5);
+  g.fillCircle(x - 9 * s, y + 1, 6 * s);
+  g.fillCircle(x, y - 3 * s, 9 * s);
+  g.fillCircle(x + 10 * s, y + 1, 6 * s);
+  g.fillRect(x - 9 * s, y + 1, x + 10 * s, y + 7 * s);
+  g.setColor(dark ? 0 : 1, dark ? 0 : 1, 1);
+  g.fillCircle(x - 9 * s, y, 5 * s);
+  g.fillCircle(x, y - 4 * s, 8 * s);
+  g.fillCircle(x + 10 * s, y, 5 * s);
+  g.fillRect(x - 9 * s, y, x + 10 * s, y + 5 * s);
+}
+
+// Weather goes in the sky behind the text: clouds, then rain/snow falling
+// from them down to the horizon, a lightning bolt, or bands of fog.
+function drawWeather (night) {
+  const sc = weather && weather.scene;
+  if (!sc) return;
+  g.setClipRect(0, skyTop, w - 1, horizon - 1);
+
+  if (sc.precip) {
+    const top = 56;
+    const span = horizon - top - 2;
+    const n = sc.precip === 'drizzle' ? 18 : 30;
+    g.setColor(night && sc.precip !== 'snow' ? 0 : 1, 1, 1);
+    for (let i = 0; i < n && span > 0; i++) {
+      const x = (i * 47 + 5) % w;
+      const y = top + (i * 29) % span;
+      if (sc.precip === 'snow') g.fillRect(x, y, x + 1, y + 1);
+      else g.drawLine(x, y, x - 2, y + (sc.precip === 'drizzle' ? 3 : 6));
+    }
+  }
+
+  for (let i = 0; i < sc.clouds; i++) {
+    const c = CLOUDS[i];
+    drawCloud(c[0], c[1], c[2], night);
+  }
+
+  if (sc.storm) {
+    const x = CLOUDS[1][0] - 4;
+    const y = CLOUDS[1][1] + 8;
+    g.setColor(1, 1, 0);
+    g.fillPoly([x + 4, y, x - 4, y + 13, x + 1, y + 13, x - 3, y + 24,
+                x + 9, y + 9, x + 3, y + 9, x + 8, y]);
+  }
+
+  if (sc.fog) {
+    g.setColor(night ? 0 : 1, night ? 0 : 1, 1);
+    for (let k = 1; k <= 4; k++) {
+      const y = horizon - 5 * k;
+      if (y < skyTop) break;
+      for (let x = (k * 7) % 20 - 20; x < w; x += 20) g.fillRect(x, y, x + 12, y + 1);
+    }
+  }
+  g.setClipRect(0, 0, w - 1, h - 1);
 }
 
 function drawSinuses () {
@@ -347,67 +470,80 @@ function drawSinuses () {
     x += sinStep; // no need to draw all steps
   }
 
-  // sea level line (endpoints precomputed in computeSun)
+  // sea level line
   g.setColor(0, 0.5, 1);
-  g.drawLine(0, SL0, w, SL1);
-  g.drawLine(0, SL0 + 1, w, SL1 + 1);
+  g.fillRect(0, horizon, w, horizon + 1);
 }
 
-function drawTimes () {
-  if (!nextAppt) return;
+/* Next calendar event, along the bottom. Centred if it fits on one line,
+ * otherwise wrapped (up to APPT_LINES lines) and left-aligned. The start time
+ * is yellow, prefixed with a cyan "Tmw" if it's tomorrow. */
+const APPT_LINES = 2;
 
-  g.setFont('6x8', 2);
-  g.setColor(1, 1, 1);
+function drawAppt (nowMs) {
+  const a = nextAppointment(nowMs);
+  if (!a) return;
 
-  const timeStr = nextAppt.allDay ? '' : (formatAsTime(nextAppt.when.getHours(), nextAppt.when.getMinutes()) + ' ');
+  const when = new Date(a.start);
+  const tomorrow = a.start > nowMs && when.getDate() !== new Date(nowMs).getDate();
+  const tmwStr = tomorrow ? 'Tmw ' : '';
+  const timeStr = a.allDay ? '' : formatAsTime(when.getHours(), when.getMinutes()) + ' ';
 
-  let msg = nextAppt.msg;
-  if (msg.length > 18) msg = msg.substr(0, 17) + '…';
-  const line = timeStr + msg;
-  g.setFontAlign(0, -1, 0);
-  g.drawString(line, w / 2, h - 20);
+  g.setFont('6x15');
   g.setFontAlign(-1, -1, 0);
-}
-
-function drawGlow (x, y) {
-  g.setColor(0.2, 0.2, 0);
-  if (x > sunRiseX && x < sunSetX) {
-    g.fillCircle(x, y, r + 20);
-    g.setColor(0.5, 0.5, 0);
+  const maxW = w - 8;
+  let lines = g.wrapString(tmwStr + timeStr + a.msg, maxW);
+  if (lines.length > APPT_LINES) {
+    lines = lines.slice(0, APPT_LINES);
+    let last = lines[APPT_LINES - 1];
+    while (last.length && g.stringWidth(last + '...') > maxW) last = last.slice(0, -1);
+    lines[APPT_LINES - 1] = last.trim() + '...';
   }
-  g.fillCircle(x, y, r + 8);
 
-  // mask below horizon by repainting the ground polygon in black
-  g.setColor(0, 0, 0);
-  g.fillPoly([0, SL0, w, SL1, w, h, 0, h]);
+  const lh = g.getFontHeight();
+  const x = (lines.length === 1) ? ((w - g.stringWidth(lines[0])) / 2) | 0 : 4;
+  let y = h - lines.length * lh - 1;
+
+  g.setColor(1, 1, 1);
+  for (let i = 0; i < lines.length; i++) g.drawString(lines[i], x, y + i * lh);
+  // recolour the prefix on the first line by drawing over it
+  if (lines[0].indexOf(tmwStr + timeStr) === 0) {
+    g.setColor(0, 1, 1);
+    g.drawString(tmwStr, x, y);
+    g.setColor(1, 1, 0);
+    g.drawString(timeStr, x + g.stringWidth(tmwStr), y);
+  }
 }
 
-function drawBall (x, y) {
-  if (x > sunRiseX && x < sunSetX) {
+function drawGlow (x, y, up) {
+  if (!up) return;
+  g.setColor(0.5, 0.5, 0);
+  g.fillCircle(x, y, rUp + 6);
+  drawGround(); // mask below the horizon
+}
+
+function drawBall (x, y, up) {
+  if (up) {
     g.setColor(1, 1, 1);
+    g.fillCircle(x, y, rUp);
+    g.setColor(1, 1, 0);
+    g.drawCircle(x, y, rUp);
   } else {
-    g.setColor(0.5, 0.5, 0);
+    g.setColor(0, 0, 0);
+    g.fillCircle(x, y, rDown);
+    g.setColor(1, 1, 0);
+    g.drawCircle(x, y, rDown);
   }
-  g.fillCircle(x, y, r);
-  g.setColor(1, 1, 0);
-  g.drawCircle(x, y, r);
 }
 
-function drawClock (now, t) {
-  const hours = now.getHours();
-  const mins = now.getMinutes();
-
-  g.setFont('Vector', 30);
-  g.setColor(1, 1, 1);
-  g.drawString(formatAsTime(hours, mins), w / 1.9, 32);
-  const mo = now.getMonth() + 1;
-  const da = now.getDate();
-  g.setFont('6x8', 2);
+function drawClock (now) {
   g.setFontAlign(-1, -1, 0);
-  g.drawString('' + da + '/' + mo, 5, 30);
+  g.setFont('Vector', 30);
+  drawOutlined(formatAsTime(now.getHours(), now.getMinutes()), w / 1.9, 32);
+  g.setFont('6x8', 2);
+  drawOutlined('' + now.getDate() + '/' + (now.getMonth() + 1), 5, 30);
 
   // Next sunrise/sunset, under the date on the left.
-  // Now that sunrise/sunset carry today's real date, these comparisons work.
   const nowMs = now.getTime();
   let nextSun, up;
   if (nowMs < sunrise.getTime()) {
@@ -423,18 +559,28 @@ function drawClock (now, t) {
   const ax = 5;  // arrow left x
   const aw = 10; // arrow width
   const ah = 12; // arrow height
+  const arrow = up ? [ax + aw / 2, ty, ax, ty + ah, ax + aw, ty + ah]
+                   : [ax, ty, ax + aw, ty, ax + aw / 2, ty + ah];
+  g.setColor(0, 0, 0);
+  g.drawPoly(arrow, true);
   g.setColor(1, 1, 0);
-  if (up) {
-    g.fillPoly([ax + aw / 2, ty, ax, ty + ah, ax + aw, ty + ah]); // up
-  } else {
-    g.fillPoly([ax, ty, ax + aw, ty, ax + aw / 2, ty + ah]);      // down
-  }
+  g.fillPoly(arrow);
+  if (!isNaN(nextSun.getTime()))
+    drawOutlined(formatAsTime(nextSun.getHours(), nextSun.getMinutes()), ax + aw + 4, ty);
 
-  g.setColor(1, 1, 1);
-  g.setFont('6x8', 2);
-  g.setFontAlign(-1, -1, 0);
-  g.drawString(formatAsTime(nextSun.getHours(), nextSun.getMinutes()),
-               ax + aw + 4, ty);
+  // Temperature, under the time on the right.
+  if (weather && weather.temp !== undefined) {
+    let str;
+    try {
+      str = require('locale').temp(weather.temp, 0);
+    } catch (e) {
+      str = Math.round(weather.temp) + '\'C';
+    }
+    g.setFont('6x15');
+    g.setFontAlign(1, -1, 0);
+    drawOutlined(str, w - 4, 64);
+    g.setFontAlign(-1, -1, 0);
+  }
 }
 
 function renderScreen () {
@@ -442,21 +588,23 @@ function renderScreen () {
   const t = now.getHours() + now.getMinutes() / 60;
   const nowX = xfromTime(t);
   const nowY = ypos(nowX);
+  const up = nowY < horizon;
+  const sky = skyForTime(t);
 
+  g.reset();
   g.setColor(0, 0, 0);
-  g.fillRect(0, 30, w, h);
-  g.setFontAlign(-1, -1, 0);
+  g.fillRect(0, skyTop, w, h);
 
-  const starLevel = drawSky(t);
-  drawStars(starLevel);
-
-  Bangle.drawWidgets();
-
-  drawGlow(nowX, nowY);
+  drawSky(sky);
+  // can't see the stars through heavy cloud
+  const sc = weather && weather.scene;
+  if (!sc || (sc.clouds < 3 && !sc.precip)) drawStars(sky.stars);
+  drawGlow(nowX, nowY, up);
+  drawWeather(sky.stars > 0);
   drawSinuses();
-  drawTimes();
-  drawClock(now, t);
-  drawBall(nowX, nowY);
+  drawBall(nowX, nowY, up);
+  drawAppt(now.getTime());
+  drawClock(now);
 }
 
 /* ---------------------------------------------------------------------------
@@ -476,15 +624,26 @@ function queueNext () {
 
 function tick () {
   if (Math.floor(Date.now() / 86400000) !== sunDay) computeSun(); // day rollover
-  refreshAppt();
+  const scanned = apptScanAt;
+  refreshAppts();
+  if (apptScanAt !== scanned) weather = loadWeather(); // same cadence as calendar
   renderScreen();
   queueNext();
 }
 
+Bangle.on('lcdPower', function (on) {
+  if (on) {
+    tick();
+  } else if (drawTimeout) {
+    clearTimeout(drawTimeout);
+    drawTimeout = undefined;
+  }
+});
 
 function main () {
   g.setBgColor(0, 0, 0);
   g.clear();
+  Bangle.drawWidgets();
   computeSun();
   tick();
 }

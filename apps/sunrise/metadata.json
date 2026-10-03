@@ -2,7 +2,7 @@
   "id": "sunrise",
   "name": "Sunrise",
   "shortName": "Sunrise",
-  "version": "0.20",
+  "version": "0.21",
   "type": "clock",
   "author": "radare",
   "description": "Show sunrise and sunset times",
