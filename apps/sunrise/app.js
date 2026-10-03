@@ -2,42 +2,43 @@
 // hacks by claude
 // sunrise/sunset script by Matt Kane from https://github.com/Triggertrap/sun-js
 
-const LOCATION_FILE = 'mylocation.json';
+// Everything lives in this block so the clock can be fast-loaded: nothing
+// leaks into the global scope, and setUI's remove() undoes what we set up.
+{
+const storage = require('Storage');
 
-Bangle.setUI('clock');
-Bangle.loadWidgets();
+const settings = Object.assign({
+  weather: true,   // clouds/rain etc in the sky, and rain forecast on the axis
+  calendar: true,  // next event at the bottom, and events on the axis
+  moon: true
+}, storage.readJSON('sunrise.json', 1) || {});
+const is12h = (storage.readJSON('setting.json', 1) || {})['12hour'];
 
 // requires the myLocation app
-function loadLocation () {
-  try {
-    return require('Storage').readJSON(LOCATION_FILE, 1);
-  } catch (e) {
-    return { lat: 41.38, lon: 2.168 };
-  }
-}
-const latlon = loadLocation() || {};
+const latlon = storage.readJSON('mylocation.json', 1) || {};
 const lat = latlon.lat || 41.38;
 const lon = latlon.lon || 2.168;
 
 /* ---------------------------------------------------------------------------
- *  Next-appointment cache
+ *  Calendar cache
  *  Reading + parsing the calendar JSON is the single most expensive thing this
- *  watch face does, so we do NOT do it every minute. Every APPT_RESCAN_MS we
- *  pull out the handful of events that could become "next" before the
- *  following scan, and each minute we just pick from that short list. That
- *  way the one-day look-ahead window slides smoothly between scans.
+ *  watch face does, so we do NOT do it every minute. Every RESCAN_MS we pull
+ *  out the handful of events that could be relevant before the following
+ *  scan, and each minute we just pick from that short list. That way the
+ *  one-day look-ahead window slides smoothly between scans.
  * ------------------------------------------------------------------------- */
-const APPT_RESCAN_MS = 10 * 60 * 1000;      // 10 minutes
-const APPT_WINDOW_MS = 24 * 60 * 60 * 1000; // only show events starting within a day
+const RESCAN_MS = 10 * 60 * 1000;          // 10 minutes
+const WINDOW_MS = 24 * 60 * 60 * 1000;     // only show things within a day
 let appts = [];
-let apptScanAt = 0;
+let scanAt = 0;
 
-function scanAppointments () {
+const scanAppointments = function () {
   const list = [];
+  if (!settings.calendar) return list;
   try {
-    const events = require('Storage').readJSON('android.calendar.json', 1) || [];
+    const events = storage.readJSON('android.calendar.json', 1) || [];
     const nowSec = Date.now() / 1000;
-    const latest = nowSec + (APPT_WINDOW_MS + APPT_RESCAN_MS) / 1000;
+    const latest = nowSec + (WINDOW_MS + RESCAN_MS) / 1000;
     for (const e of events) {
       if (!e.timestamp || e.timestamp > latest) continue;
       const end = e.timestamp + (e.durationInSeconds || 0);
@@ -50,43 +51,37 @@ function scanAppointments () {
       });
     }
   } catch (e) { }
+  list.sort((a, b) => a.start - b.start);
   return list;
-}
+};
 
-function refreshAppts () {
-  const now = Date.now();
-  if (apptScanAt === 0 || (now - apptScanAt) > APPT_RESCAN_MS) {
-    appts = scanAppointments();
-    apptScanAt = now;
-  }
-}
+// Events that haven't ended and start within the window, soonest first.
+const upcoming = function (nowMs) {
+  return appts.filter(a => a.end > nowMs && a.start <= nowMs + WINDOW_MS);
+};
 
-// Earliest timed event that hasn't ended and starts within the window;
-// all-day events only if there's no timed one.
-function nextAppointment (nowMs) {
-  let bestTimed = null;
-  let bestAllDay = null;
-  for (const a of appts) {
-    if (a.end <= nowMs || a.start > nowMs + APPT_WINDOW_MS) continue;
-    if (a.allDay) {
-      if (!bestAllDay || a.start < bestAllDay.start) bestAllDay = a;
-    } else {
-      if (!bestTimed || a.start < bestTimed.start) bestTimed = a;
-    }
-  }
-  return bestTimed || bestAllDay;
-}
+// The one to show at the bottom: the next timed event, or failing that the
+// next all-day one.
+const nextAppointment = function (list) {
+  return list.find(a => !a.allDay) || list[0];
+};
 
 /* ---------------------------------------------------------------------------
- *  Weather, from the weather app's weather.json. Only re-read alongside the
- *  calendar, and ignored once it's stale.
+ *  Weather, from the weather app. Re-read alongside the calendar, and
+ *  ignored once it's stale. If the weather app is set to fetch forecasts we
+ *  also pick out the hours when rain is expected.
  * ------------------------------------------------------------------------- */
 const WEATHER_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 let weather = null;
 
+// Is an OpenWeatherMap condition code some kind of precipitation?
+const isWet = function (code) {
+  return code >= 200 && code < 700;
+};
+
 // Turn an OpenWeatherMap condition code (or the text, if there's no code)
 // into what we draw: number of clouds, precipitation type and fog.
-function weatherScene (code, txt) {
+const weatherScene = function (code, txt) {
   txt = (txt || '').toLowerCase();
   if (!code) {
     if (txt.indexOf('thunder') >= 0) code = 200;
@@ -105,18 +100,36 @@ function weatherScene (code, txt) {
   if (code < 800) return { clouds: 0, fog: true };
   if (code === 800) return null;
   return { clouds: Math.min(code - 800, 4) };
-}
+};
 
-function loadWeather () {
+const loadWeather = function () {
+  if (!settings.weather) return null;
   try {
-    const json = require('Storage').readJSON('weather.json', 1);
-    const wx = json && json.weather;
+    let wx;
+    if (storage.read('weather') !== undefined) {
+      wx = require('weather').getWeather(true); // decodes forecasts, if enabled
+    } else {
+      const json = storage.readJSON('weather.json', 1);
+      wx = json && json.weather;
+    }
     if (!wx || (wx.time && Date.now() - wx.time > WEATHER_MAX_AGE_MS)) return null;
-    return { scene: weatherScene(wx.code, wx.txt) };
+
+    // [startMs, endMs] spans when the hourly forecast says rain
+    const rain = [];
+    const fc = wx.hourfcast;
+    if (fc && fc.time) {
+      for (let i = 0; i < fc.time.length; i++) {
+        if (!isWet(fc.code[i]) && !(fc.rain && fc.rain[i] >= 50)) continue;
+        const start = fc.time[i] * 1000;
+        const end = (i + 1 < fc.time.length) ? fc.time[i + 1] * 1000 : start + 3600000;
+        rain.push([start, end]);
+      }
+    }
+    return { scene: weatherScene(wx.code, wx.txt), rain: rain };
   } catch (e) {
     return null;
   }
-}
+};
 
 /**
  *	Sunrise/sunset script. By Matt Kane.
@@ -138,141 +151,67 @@ function loadWeather () {
  * or connect to: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
  */
 
-Date.prototype.sunrise = function (latitude, longitude, zenith) {
-  return this.sunriseSet(latitude, longitude, true, zenith);
+const DEG = Math.PI / 180;
+const DEGREES_PER_HOUR = 360 / 24;
+const sinDeg = d => Math.sin(d * DEG);
+const cosDeg = d => Math.cos(d * DEG);
+const tanDeg = d => Math.tan(d * DEG);
+const asinDeg = x => Math.asin(x) / DEG;
+const acosDeg = x => Math.acos(x) / DEG;
+const mod = function (a, b) {
+  const result = a % b;
+  return (result < 0) ? result + b : result;
 };
 
-Date.prototype.sunset = function (latitude, longitude, zenith) {
-  return this.sunriseSet(latitude, longitude, false, zenith);
+const dayOfYear = function (date) {
+  const onejan = new Date(date.getFullYear(), 0, 1);
+  return Math.ceil((date - onejan) / 86400000);
 };
 
-Date.prototype.sunriseSet = function (latitude, longitude, sunrise, zenith) {
-  if (!zenith) {
-    zenith = 90.8333;
-  }
+// Time on `date`'s (UTC) day that the sun crosses `zenith` degrees, rising or
+// setting. 90.8333 is sunrise/sunset, 96 is civil dawn/dusk. Invalid date if
+// it doesn't happen that day.
+const sunTime = function (date, rising, zenith) {
+  const hoursFromMeridian = lon / DEGREES_PER_HOUR;
+  const approxTimeOfEventInDays = dayOfYear(date) + (((rising ? 6 : 18) - hoursFromMeridian) / 24);
 
-  const hoursFromMeridian = longitude / Date.DEGREES_PER_HOUR;
-  const dayOfYear = this.getDayOfYear();
-  let approxTimeOfEventInDays;
-  let sunMeanAnomaly;
-  let sunTrueLongitude;
-  let ascension;
-  let rightAscension;
-  let lQuadrant;
-  let raQuadrant;
-  let sinDec;
-  let cosDec;
-  let localHourAngle;
-  let localHour;
-  let localMeanTime;
-  let time;
+  const sunMeanAnomaly = (0.9856 * approxTimeOfEventInDays) - 3.289;
 
-  if (sunrise) {
-    approxTimeOfEventInDays = dayOfYear + ((6 - hoursFromMeridian) / 24);
-  } else {
-    approxTimeOfEventInDays = dayOfYear + ((18.0 - hoursFromMeridian) / 24);
-  }
+  let sunTrueLongitude = sunMeanAnomaly + (1.916 * sinDeg(sunMeanAnomaly)) + (0.020 * sinDeg(2 * sunMeanAnomaly)) + 282.634;
+  sunTrueLongitude = mod(sunTrueLongitude, 360);
 
-  sunMeanAnomaly = (0.9856 * approxTimeOfEventInDays) - 3.289;
+  let rightAscension = mod(Math.atan(0.91764 * tanDeg(sunTrueLongitude)) / DEG, 360);
+  const lQuadrant = Math.floor(sunTrueLongitude / 90) * 90;
+  const raQuadrant = Math.floor(rightAscension / 90) * 90;
+  rightAscension = (rightAscension + (lQuadrant - raQuadrant)) / DEGREES_PER_HOUR;
 
-  sunTrueLongitude = sunMeanAnomaly + (1.916 * Math.sinDeg(sunMeanAnomaly)) + (0.020 * Math.sinDeg(2 * sunMeanAnomaly)) + 282.634;
-  sunTrueLongitude = Math.mod(sunTrueLongitude, 360);
+  const sinDec = 0.39782 * sinDeg(sunTrueLongitude);
+  const cosDec = cosDeg(asinDeg(sinDec));
+  const cosLocalHourAngle = (cosDeg(zenith) - (sinDec * sinDeg(lat))) / (cosDec * cosDeg(lat));
 
-  ascension = 0.91764 * Math.tanDeg(sunTrueLongitude);
-  rightAscension = 360 / (2 * Math.PI) * Math.atan(ascension);
-  rightAscension = Math.mod(rightAscension, 360);
+  let localHourAngle = acosDeg(cosLocalHourAngle);
+  if (rising) localHourAngle = 360 - localHourAngle;
 
-  lQuadrant = Math.floor(sunTrueLongitude / 90) * 90;
-  raQuadrant = Math.floor(rightAscension / 90) * 90;
-  rightAscension = rightAscension + (lQuadrant - raQuadrant);
-  rightAscension /= Date.DEGREES_PER_HOUR;
+  const localMeanTime = localHourAngle / DEGREES_PER_HOUR + rightAscension - (0.06571 * approxTimeOfEventInDays) - 6.622;
+  const time = mod(localMeanTime - hoursFromMeridian, 24); // UTC hour-of-day of the event
 
-  sinDec = 0.39782 * Math.sinDeg(sunTrueLongitude);
-  cosDec = Math.cosDeg(Math.asinDeg(sinDec));
-  const cosLocalHourAngle = ((Math.cosDeg(zenith)) - (sinDec * (Math.sinDeg(latitude)))) / (cosDec * (Math.cosDeg(latitude)));
-
-  localHourAngle = Math.acosDeg(cosLocalHourAngle);
-
-  if (sunrise) {
-    localHourAngle = 360 - localHourAngle;
-  }
-
-  localHour = localHourAngle / Date.DEGREES_PER_HOUR;
-
-  localMeanTime = localHour + rightAscension - (0.06571 * approxTimeOfEventInDays) - 6.622;
-
-  time = localMeanTime - (longitude / Date.DEGREES_PER_HOUR);
-  time = Math.mod(time, 24); // UTC hour-of-day of the event
-
-  // FIX: anchor the result to *this* day's UTC midnight instead of the
-  // 1970 epoch. Previously the date part was never set, so every sunrise/
-  // sunset landed on 1970-01-01 and any `.getTime()` comparison against
-  // `now` was meaningless (drawClock always fell through to "tomorrow").
-  // Using getHours()/getMinutes() still yields the correct LOCAL time via the
-  // watch's timezone offset, exactly as before.
+  // anchor the result to this day's UTC midnight
   const dayMs = 86400000;
-  const utcMidnight = Math.floor(this.getTime() / dayMs) * dayMs;
-  const milli = utcMidnight + (time * 60 * 60 * 1000);
-
-  return new Date(milli);
+  return new Date(Math.floor(date.getTime() / dayMs) * dayMs + time * 3600000);
 };
 
-Date.DEGREES_PER_HOUR = 360 / 24;
-
-// Utility functions
-
-Date.prototype.getDayOfYear = function () {
-  const onejan = new Date(this.getFullYear(), 0, 1);
-  return Math.ceil((this - onejan) / 86400000);
-};
-
-Math.degToRad = function (num) {
-  return num * Math.PI / 180;
-};
-
-Math.radToDeg = function (radians) {
-  return radians * 180.0 / Math.PI;
-};
-
-Math.sinDeg = function (deg) {
-  return Math.sin(deg * 2.0 * Math.PI / 360.0);
-};
-
-Math.acosDeg = function (x) {
-  return Math.acos(x) * 360.0 / (2 * Math.PI);
-};
-
-Math.asinDeg = function (x) {
-  return Math.asin(x) * 360.0 / (2 * Math.PI);
-};
-
-Math.tanDeg = function (deg) {
-  return Math.tan(deg * 2.0 * Math.PI / 360.0);
-};
-
-Math.cosDeg = function (deg) {
-  return Math.cos(deg * 2.0 * Math.PI / 360.0);
-};
-
-Math.mod = function (a, b) {
-  let result = a % b;
-  if (result < 0) {
-    result += b;
-  }
-  return result;
-};
+/* ------------------------------------------------------------------------- */
 
 const w = g.getWidth();
 const h = g.getHeight();
 const oy = h / 1.7;
 const amp = 32;    // height of the sun's daily sine path
-const skyTop = 30;
-const sinStep = 11;
+const skyTop = 24;
 const rUp = 8;     // sun radius above the horizon
 const rDown = 5;   // ...and below it
-
-const TWILIGHT = 0.9;
-const GOLDEN = 1.2;
+const rMoon = 6;
+const GOLDEN = 1.2;          // hours either side of sunrise/sunset
+const FALLBACK_TWILIGHT = 0.9;
 
 /* ---------------------------------------------------------------------------
  *  Per-day sun state. Everything here depends only on the date and the
@@ -285,107 +224,149 @@ const GOLDEN = 1.2;
  *  days a shallow one.
  * ------------------------------------------------------------------------- */
 let sunrise, sunset;
-let sunRiseX, sunSetX, noonX;
-let riseT, setT;
+let noonX;
+let riseT, setT, dawnT, duskT;
 let horizon;       // y of the horizon
 let sunDay = -1;   // UTC day index the above were computed for
 
-function xfromTime (t) {
-  return (w / 24) * t;
-}
+const hourOf = d => d.getHours() + d.getMinutes() / 60;
+const xfromTime = t => (w / 24) * t;
+const xOfMs = ms => xfromTime(hourOf(new Date(ms)));
 
-function ypos (x) {
+const ypos = function (x) {
   return oy - amp * Math.cos(((x - noonX) / w) * 2 * Math.PI);
-}
+};
 
-function computeSun () {
+const computeSun = function () {
   const d = new Date();
-  sunrise = d.sunrise(lat, lon);
-  sunset = d.sunset(lat, lon);
-  riseT = sunrise.getHours() + sunrise.getMinutes() / 60;
-  setT = sunset.getHours() + sunset.getMinutes() / 60;
-  sunRiseX = xfromTime(riseT);
-  sunSetX = xfromTime(setT);
-  noonX = (sunRiseX + sunSetX) / 2;
-  horizon = Math.round(ypos(sunRiseX));
-  if (!(horizon > 0)) { // polar day/night: sunrise is NaN, fall back to noon at 12
+  sunrise = sunTime(d, true, 90.8333);
+  sunset = sunTime(d, false, 90.8333);
+  riseT = hourOf(sunrise);
+  setT = hourOf(sunset);
+  noonX = xfromTime((riseT + setT) / 2);
+  horizon = Math.round(ypos(xfromTime(riseT)));
+  if (!(horizon > 0)) { // polar day/night: no sunrise, fall back to noon at 12
     noonX = w / 2;
     horizon = oy;
   }
+  // civil twilight; doesn't end at all in a summer "white night"
+  dawnT = hourOf(sunTime(d, true, 96));
+  duskT = hourOf(sunTime(d, false, 96));
+  if (isNaN(dawnT) || dawnT > riseT) dawnT = isNaN(riseT) ? 0 : riseT - FALLBACK_TWILIGHT;
+  if (isNaN(duskT) || duskT < setT) duskT = isNaN(setT) ? 24 : setT + FALLBACK_TWILIGHT;
   sunDay = Math.floor(d.getTime() / 86400000);
-}
+};
+
+// Moon phase: 0 = new, 0.5 = full
+const moonPhase = function (ms) {
+  return mod((ms - 947182440000) / 86400000 / 29.530588853, 1); // from a known new moon
+};
 
 // Stars: fixed positions, generated once.
 const stars = [];
-(function () {
-  for (let i = 0; i < 45; i++) {
-    stars.push({
-      x: (Math.random() * w) | 0,
-      y: (skyTop + Math.random() * (oy + amp / 2 - skyTop)) | 0,
-      thr: Math.random(),
-      big: Math.random() < 0.15,
-      c: (Math.random() < 0.85) ? [1, 1, 1] : [0, 1, 1]
-    });
-  }
-})();
+for (let i = 0; i < 45; i++) {
+  stars.push({
+    x: (Math.random() * w) | 0,
+    y: (skyTop + Math.random() * (oy + amp / 2 - skyTop)) | 0,
+    thr: Math.random(),
+    big: Math.random() < 0.15,
+    c: (Math.random() < 0.85) ? [1, 1, 1] : [0, 1, 1]
+  });
+}
 
 // Fixed cloud positions [x, y, scale], in the order they get added as the
 // sky gets cloudier. Kept low in the sky, under the text where possible, and
 // clipped to the horizon.
 const CLOUDS = [[40, 76, 1], [118, 80, 1.1], [86, 71, 0.7], [158, 92, 0.8]];
 
-function formatAsTime (hour, minute) {
-  return '' + ((hour < 10) ? '0' : '') + (0 | hour) +
-         ':' + ((minute < 10) ? '0' : '') + (0 | minute);
-}
+const pad2 = n => (n < 10 ? '0' : '') + n;
+const formatTime = function (d) {
+  let hr = d.getHours();
+  if (is12h) return '' + (hr % 12 || 12) + ':' + pad2(d.getMinutes());
+  return pad2(hr) + ':' + pad2(d.getMinutes());
+};
 
 // Draw text with a 1px black outline so it stays readable over the sky,
-// clouds and rain.
-function drawOutlined (str, x, y) {
+// clouds, rain and sea.
+const drawOutlined = function (str, x, y, col) {
   g.setColor(0, 0, 0);
   g.drawString(str, x - 1, y);
   g.drawString(str, x + 1, y);
   g.drawString(str, x, y - 1);
   g.drawString(str, x, y + 1);
-  g.setColor(1, 1, 1);
+  g.setColor.apply(g, col || [1, 1, 1]);
   g.drawString(str, x, y);
-}
+};
 
-function skyForTime (t) {
-  if (t < riseT - TWILIGHT || t > setT + TWILIGHT)
-    return { bands: null, stars: 1 };
-  if (t < riseT)
-    return { bands: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]], stars: (riseT - t) / TWILIGHT };
-  if (t < riseT + GOLDEN)
-    return { bands: [[0, 0, 1], [0, 1, 1], [1, 1, 0]], stars: 0 };
-  if (t > setT)
-    return { bands: [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]], stars: (t - setT) / TWILIGHT };
-  if (t > setT - GOLDEN)
-    return { bands: [[0, 0, 1], [1, 0, 1], [1, 1, 0]], stars: 0 };
-  const a = Math.sin(Math.PI * (t - riseT) / (setT - riseT));
-  if (a > 0.6) return { bands: [[0, 0, 1], [0, 0, 1], [0, 1, 1]], stars: 0 };
-  return { bands: [[0, 0, 1], [0, 1, 1], [0, 1, 1]], stars: 0 };
-}
+const lerp = (a, b, f) => a + (b - a) * f;
+const lerpCol = (a, b, f) => [lerp(a[0], b[0], f), lerp(a[1], b[1], f), lerp(a[2], b[2], f)];
+const lerpPal = (a, b, f) => a.map((c, i) => lerpCol(c, b[i], f));
 
-function drawSky (sky) {
-  if (sky.bands) {
-    const n = sky.bands.length;
-    const bh = (horizon - skyTop) / n;
-    for (let k = 0; k < n; k++) {
-      const c = sky.bands[k];
-      g.setColor(c[0], c[1], c[2]);
-      g.fillRect(0, skyTop + k * bh, w, skyTop + (k + 1) * bh);
-    }
+/* Sky palettes, top to horizon. The screen only has 8 colours but the
+ * firmware dithers anything in between, so we blend between these. */
+const PAL_NIGHT = [[0, 0, 0], [0, 0, 0], [0, 0, 0.1], [0, 0, 0.3]];
+const PAL_DAWN = [[0, 0, 0.5], [0.6, 0, 0.6], [1, 0.2, 0.4], [1, 0.6, 0]];
+const PAL_DAY = [[0, 0, 1], [0, 0.3, 1], [0, 0.7, 1], [0.4, 1, 1]];
+
+// Sky colours and star brightness for an hour of the day.
+const skyForTime = function (t) {
+  const evening = t > (riseT + setT) / 2;
+  const dark = evening ? duskT : dawnT;
+  const sun = evening ? setT : riseT;
+  // hours of daylight before the sun gets to the horizon (negative = below)
+  const above = evening ? sun - t : t - sun;
+  if (above < 0) {
+    // twilight: night -> dawn colours as the sun approaches the horizon
+    const f = Math.max(0, 1 + above / Math.abs(sun - dark));
+    return { pal: lerpPal(PAL_NIGHT, PAL_DAWN, f), stars: 1 - f, night: f < 0.5 };
   }
-  drawGround();
-}
+  if (above < GOLDEN) return { pal: lerpPal(PAL_DAWN, PAL_DAY, above / GOLDEN), stars: 0, glow: true };
+  return { pal: PAL_DAY, stars: 0 };
+};
 
-function drawGround () {
-  g.setColor(0, 0, 0);
-  g.fillRect(0, horizon, w, h);
-}
+const drawSky = function (sky) {
+  const pal = sky.pal;
+  const n = pal.length - 1;
+  const step = 3;
+  for (let y = skyTop; y < horizon; y += step) {
+    const f = (y - skyTop) / (horizon - skyTop) * n;
+    const i = Math.min(n - 1, f | 0);
+    g.setColor.apply(g, lerpCol(pal[i], pal[i + 1], f - i));
+    g.fillRect(0, y, w - 1, Math.min(y + step - 1, horizon - 1));
+  }
+};
 
-function drawStars (level) {
+// The ground is a sea: dark blue fading to black, with little wave marks
+// that get longer and further apart as they come closer.
+const drawSea = function () {
+  const depth = Math.min(36, h - horizon);
+  for (let y = horizon; y < h; y += 2) {
+    const f = Math.max(0, 1 - (y - horizon) / depth);
+    g.setColor(0, 0, 0.45 * f);
+    g.fillRect(0, y, w - 1, y + 1);
+  }
+  g.setColor(0, 0.4, 0.8);
+  let y = horizon + 14;
+  for (let k = 1; y < h; k++) {
+    const len = 2 + k;
+    const gap = 18 + 7 * k;
+    for (let x = (k * 37) % gap - gap; x < w; x += gap) g.fillRect(x, y, x + len, y);
+    y += 3 + 2 * k;
+  }
+};
+
+// A shimmering column on the sea under the sun or moon.
+const drawReflection = function (x, col, size) {
+  for (let k = 0; k < 9; k++) {
+    const y = horizon + 3 + k * 3;
+    if (y >= h) break;
+    const hw = size * (1 - k / 12) * ((k & 1) ? 0.6 : 1);
+    g.setColor.apply(g, lerpCol(col, [0, 0, 0.3], k / 10));
+    g.fillRect(x - hw, y, x + hw, y + 1);
+  }
+};
+
+const drawStars = function (level) {
   if (level <= 0) return;
   for (const s of stars) {
     if (s.thr > level || s.y > horizon - 3) continue;
@@ -397,27 +378,27 @@ function drawStars (level) {
       g.setPixel(s.x, s.y);
     }
   }
-}
+};
 
-function drawCloud (x, y, s, dark) {
-  g.setColor(0, 0, dark ? 1 : 0.5);
+const drawCloud = function (x, y, s, top, under) {
+  g.setColor.apply(g, under);
   g.fillCircle(x - 9 * s, y + 1, 6 * s);
   g.fillCircle(x, y - 3 * s, 9 * s);
   g.fillCircle(x + 10 * s, y + 1, 6 * s);
   g.fillRect(x - 9 * s, y + 1, x + 10 * s, y + 7 * s);
-  g.setColor(dark ? 0 : 1, dark ? 0 : 1, 1);
+  g.setColor.apply(g, top);
   g.fillCircle(x - 9 * s, y, 5 * s);
   g.fillCircle(x, y - 4 * s, 8 * s);
   g.fillCircle(x + 10 * s, y, 5 * s);
   g.fillRect(x - 9 * s, y, x + 10 * s, y + 5 * s);
-}
+};
 
 // Weather goes in the sky behind the text: clouds, then rain/snow falling
 // from them down to the horizon, a lightning bolt, or bands of fog.
-function drawWeather (night) {
+const drawWeather = function (sky) {
   const sc = weather && weather.scene;
   if (!sc) return;
-  g.setClipRect(0, skyTop, w - 1, horizon - 1);
+  const night = sky.night;
 
   if (sc.precip) {
     const top = 56;
@@ -432,9 +413,12 @@ function drawWeather (night) {
     }
   }
 
+  // white with a shadow by day, lit from below near sunrise/sunset, dim blue at night
+  const top = night ? [0, 0, 0.7] : [1, 1, 1];
+  const under = night ? [0, 0, 0.35] : sky.stars > 0 || sky.glow ? sky.pal[3] : [0.4, 0.4, 0.8];
   for (let i = 0; i < sc.clouds; i++) {
     const c = CLOUDS[i];
-    drawCloud(c[0], c[1], c[2], night);
+    drawCloud(c[0], c[1], c[2], top, under);
   }
 
   if (sc.storm) {
@@ -453,73 +437,91 @@ function drawWeather (night) {
       for (let x = (k * 7) % 20 - 20; x < w; x += 20) g.fillRect(x, y, x + 12, y + 1);
     }
   }
-  g.setClipRect(0, 0, w - 1, h - 1);
-}
+};
 
-function drawSinuses () {
-  g.setColor(1, 1, 1);
-  let x = 0;
-  let y = ypos(x);
-  while (x < w) {
-    const y2 = ypos(x + sinStep);
-    g.drawLine(x, y, x + sinStep, y2);
-    y = y2;
-    x += sinStep; // no need to draw all steps
+// Moon, with its phase. It sits on the same path as the sun, lagging it by
+// the phase (a full moon is opposite the sun), which is close enough here.
+const drawMoon = function (x, y, phase, night) {
+  if (night) {
+    g.setColor(0.2, 0.2, 0.4);
+    g.fillCircle(x, y, rMoon);
   }
+  const c = Math.cos(phase * 2 * Math.PI);
+  g.setColor(1, 1, night ? 0.6 : 1);
+  for (let dy = -rMoon; dy <= rMoon; dy++) {
+    const hw = Math.sqrt(rMoon * rMoon - dy * dy);
+    let a, b;
+    if (phase < 0.5) { a = hw * c; b = hw; } else { a = -hw; b = -hw * c; }
+    if (lat < 0) { const t = a; a = -b; b = -t; } // lit side is mirrored in the south
+    if (b - a >= 0.5) g.fillRect(Math.round(x + a), y + dy, Math.round(x + b), y + dy);
+  }
+};
 
-  // sea level line
+// The sun's path: solid for the part of the day that's gone, dotted for
+// what's to come, and dim dots where it's below the horizon.
+const drawPath = function (nowX) {
+  let px = 0;
+  let py = ypos(0);
+  for (let x = 2; x <= w; x += 2) {
+    const y = ypos(x);
+    if (y >= horizon) {
+      if (x % 6 === 0) { g.setColor(0, 0.5, 1); g.setPixel(x, y); }
+    } else if (x <= nowX) {
+      g.setColor(1, 1, 1);
+      g.drawLine(px, py, x, y);
+    } else if (x % 6 === 0) {
+      g.setColor(1, 1, 1);
+      g.fillRect(x, y, x + 1, y + 1);
+    }
+    px = x; py = y;
+  }
+};
+
+// Mark a span of time along the axis below the horizon. The axis is the next
+// 24 hours, so anything left of "now" is tomorrow.
+const drawSpan = function (startMs, endMs, nowMs, y) {
+  startMs = Math.max(startMs, nowMs);
+  endMs = Math.min(endMs, nowMs + WINDOW_MS);
+  if (endMs <= startMs) return;
+  if (endMs - startMs > WINDOW_MS - 600000) return g.fillRect(0, y, w - 1, y + 1);
+  const xs = Math.round(xOfMs(startMs));
+  let xe = Math.round(xOfMs(endMs));
+  if (xe === xs) xe = xs + 1;
+  if (xe > xs) {
+    g.fillRect(xs, y, xe, y + 1);
+  } else { // wraps past midnight
+    g.fillRect(xs, y, w - 1, y + 1);
+    g.fillRect(0, y, xe, y + 1);
+  }
+};
+
+// Horizon line, then below it: today's timed events (yellow), forecast rain
+// (cyan) and a little triangle for now.
+const drawAxis = function (nowMs, nowX, list) {
   g.setColor(0, 0.5, 1);
-  g.fillRect(0, horizon, w, horizon + 1);
-}
+  g.fillRect(0, horizon, w - 1, horizon + 1);
 
-/* Next calendar event, along the bottom. Centred if it fits on one line,
- * otherwise wrapped (up to APPT_LINES lines) and left-aligned. The start time
- * is yellow, prefixed with a cyan "+" if it's tomorrow. */
-const APPT_LINES = 2;
+  g.setColor(1, 1, 0);
+  for (const a of list) if (!a.allDay) drawSpan(a.start, a.end, nowMs, horizon + 3);
 
-function drawAppt (nowMs) {
-  const a = nextAppointment(nowMs);
-  if (!a) return;
-
-  const when = new Date(a.start);
-  const tomorrow = a.start > nowMs && when.getDate() !== new Date(nowMs).getDate();
-  const tmwStr = tomorrow ? '+' : '';
-  const timeStr = a.allDay ? '' : formatAsTime(when.getHours(), when.getMinutes()) + ' ';
-
-  g.setFont('Vector', 18);
-  g.setFontAlign(-1, -1, 0);
-  const maxW = w - 8;
-  let lines = g.wrapString(tmwStr + timeStr + a.msg, maxW);
-  if (lines.length > APPT_LINES) {
-    lines = lines.slice(0, APPT_LINES);
-    let last = lines[APPT_LINES - 1];
-    while (last.length && g.stringWidth(last + '...') > maxW) last = last.slice(0, -1);
-    lines[APPT_LINES - 1] = last.trim() + '...';
+  if (weather) {
+    g.setColor(0, 1, 1);
+    for (const r of weather.rain) drawSpan(r[0], r[1], nowMs, horizon + 6);
   }
-
-  const lh = g.getFontHeight();
-  const x = (lines.length === 1) ? ((w - g.stringWidth(lines[0])) / 2) | 0 : 4;
-  let y = h - lines.length * lh - 1;
 
   g.setColor(1, 1, 1);
-  for (let i = 0; i < lines.length; i++) g.drawString(lines[i], x, y + i * lh);
-  // recolour the prefix on the first line by drawing over it
-  if (lines[0].indexOf((tmwStr + timeStr).trim()) === 0) { // wrapping may trim the trailing space
-    g.setColor(0, 1, 1);
-    g.drawString(tmwStr, x, y);
-    g.setColor(1, 1, 0);
-    g.drawString(timeStr, x + g.stringWidth(tmwStr), y);
-  }
-}
+  const tri = [nowX, horizon + 3, nowX - 4, horizon + 10, nowX + 4, horizon + 10];
+  g.fillPoly(tri);
+  g.setColor(0, 0, 0);
+  g.drawPoly(tri, true);
+};
 
-function drawGlow (x, y, up) {
-  if (!up) return;
+const drawGlow = function (x, y) {
   g.setColor(0.5, 0.5, 0);
   g.fillCircle(x, y, rUp + 6);
-  drawGround(); // mask below the horizon
-}
+};
 
-function drawBall (x, y, up) {
+const drawBall = function (x, y, up) {
   if (up) {
     g.setColor(1, 1, 1);
     g.fillCircle(x, y, rUp);
@@ -531,14 +533,64 @@ function drawBall (x, y, up) {
     g.setColor(1, 1, 0);
     g.drawCircle(x, y, rDown);
   }
-}
+};
 
-function drawClock (now) {
+const YELLOW = [1, 1, 0];
+const CYAN = [0, 1, 1];
+
+// Coloured prefix for an event:
+//   "til 14:00" if it's on now, "in 25m" if it's within the hour,
+//   "+08:00" if it's tomorrow, otherwise just the start time.
+const apptPrefix = function (a, nowMs) {
+  const when = new Date(a.start);
+  const tomorrow = a.start > nowMs && when.getDate() !== new Date(nowMs).getDate();
+  if (a.allDay) return tomorrow ? [['+', CYAN]] : [];
+  if (a.start <= nowMs) return [['til ' + formatTime(new Date(a.end)), YELLOW]];
+  const mins = Math.round((a.start - nowMs) / 60000);
+  if (mins < 60) return [[mins < 1 ? 'now' : 'in ' + mins + 'm', YELLOW]];
+  return tomorrow ? [['+', CYAN], [formatTime(when), YELLOW]] : [[formatTime(when), YELLOW]];
+};
+
+// Draw an event: its prefix and title, wrapped to at most maxLines lines and
+// left-aligned. If atBottom, y is its bottom edge and a single line is
+// centred. Returns the height.
+const drawEvent = function (a, nowMs, y, maxLines, atBottom) {
+  const prefix = apptPrefix(a, nowMs);
+  const prefixStr = prefix.map(p => p[0]).join('');
+  const maxW = w - 8;
+  let lines = g.wrapString((prefixStr ? prefixStr + ' ' : '') + a.msg, maxW);
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    let last = lines[maxLines - 1];
+    while (last.length && g.stringWidth(last + '...') > maxW) last = last.slice(0, -1);
+    lines[maxLines - 1] = last.trim() + '...';
+  }
+
+  const lh = g.getFontHeight();
+  const x = (atBottom && lines.length === 1) ? ((w - g.stringWidth(lines[0])) / 2) | 0 : 4;
+  if (atBottom) y -= lines.length * lh;
+
+  for (let i = 0; i < lines.length; i++) drawOutlined(lines[i], x, y + i * lh);
+  // recolour the prefix on the first line by drawing over it
+  if (prefixStr && lines[0].indexOf(prefixStr) === 0) {
+    let px = x;
+    for (const p of prefix) {
+      g.setColor.apply(g, p[1]);
+      g.drawString(p[0], px, y);
+      px += g.stringWidth(p[0]);
+    }
+  }
+  return lines.length * lh;
+};
+
+const drawClock = function (now) {
+  g.setFontAlign(1, -1, 0);
+  g.setFont('Vector', 34);
+  drawOutlined(formatTime(now), w - 3, 27);
+
   g.setFontAlign(-1, -1, 0);
-  g.setFont('Vector', 30);
-  drawOutlined(formatAsTime(now.getHours(), now.getMinutes()), w / 1.9, 32);
-  g.setFont('6x8', 2);
-  drawOutlined('' + now.getDate() + '/' + (now.getMonth() + 1), 5, 30);
+  g.setFont('Vector', 18);
+  drawOutlined('' + now.getDate() + '/' + (now.getMonth() + 1), 4, 28);
 
   // Next sunrise/sunset, under the date on the left.
   const nowMs = now.getTime();
@@ -548,47 +600,95 @@ function drawClock (now) {
   } else if (nowMs < sunset.getTime()) {
     nextSun = sunset; up = false;
   } else {
-    nextSun = new Date(nowMs + 86400000).sunrise(lat, lon);
+    nextSun = sunTime(new Date(nowMs + 86400000), true, 90.8333);
     up = true;
   }
 
-  const ty = 50; // y position for sun time line
-  const ax = 5;  // arrow left x
+  const ty = 48; // y position for sun time line
+  const ax = 4;  // arrow left x
   const aw = 10; // arrow width
-  const ah = 12; // arrow height
-  const arrow = up ? [ax + aw / 2, ty, ax, ty + ah, ax + aw, ty + ah]
-                   : [ax, ty, ax + aw, ty, ax + aw / 2, ty + ah];
+  const ah = 11; // arrow height
+  const arrow = up ? [ax + aw / 2, ty + 1, ax, ty + ah + 1, ax + aw, ty + ah + 1]
+                   : [ax, ty + 2, ax + aw, ty + 2, ax + aw / 2, ty + ah + 2];
   g.setColor(0, 0, 0);
   g.drawPoly(arrow, true);
   g.setColor(1, 1, 0);
   g.fillPoly(arrow);
   if (!isNaN(nextSun.getTime()))
-    drawOutlined(formatAsTime(nextSun.getHours(), nextSun.getMinutes()), ax + aw + 4, ty);
-}
+    drawOutlined(formatTime(nextSun), ax + aw + 3, ty);
+};
 
-function renderScreen () {
+/* Tapping shows a list of everything coming up in the next day, until
+ * tapped again or LIST_MS passes. */
+const LIST_MS = 10000;
+let listTimeout;
+
+const drawList = function (nowMs) {
+  g.setColor(0, 0, 0);
+  g.fillRect(0, skyTop, w - 1, h - 1);
+  g.setFont('Vector', 16);
+  g.setFontAlign(-1, -1, 0);
+  const list = upcoming(nowMs);
+  if (!list.length) {
+    g.setFontAlign(0, 0, 0);
+    drawOutlined('Nothing today', w / 2, (skyTop + h) / 2);
+    return;
+  }
+  let y = skyTop + 4;
+  for (const a of list) {
+    if (y > h - g.getFontHeight()) break;
+    y += drawEvent(a, nowMs, y, 2, false) + 4;
+  }
+};
+
+const renderScreen = function () {
   const now = new Date();
-  const t = now.getHours() + now.getMinutes() / 60;
+  const nowMs = now.getTime();
+  if (listTimeout) return drawList(nowMs);
+
+  const t = hourOf(now);
   const nowX = xfromTime(t);
   const nowY = ypos(nowX);
   const up = nowY < horizon;
   const sky = skyForTime(t);
+  const sc = weather && weather.scene;
+  const list = upcoming(nowMs);
 
   g.reset();
-  g.setColor(0, 0, 0);
-  g.fillRect(0, skyTop, w, h);
-
   drawSky(sky);
+  drawSea();
+
+  // everything in the sky gets clipped to the horizon
+  g.setClipRect(0, skyTop, w - 1, horizon - 1);
   // can't see the stars through heavy cloud
-  const sc = weather && weather.scene;
   if (!sc || (sc.clouds < 3 && !sc.precip)) drawStars(sky.stars);
-  drawGlow(nowX, nowY, up);
-  drawWeather(sky.stars > 0);
-  drawSinuses();
+  if (up) drawGlow(nowX, nowY);
+  let moonX, moonUp = false;
+  if (settings.moon) {
+    const phase = moonPhase(nowMs);
+    moonX = xfromTime(mod(t - phase * 24, 24));
+    const moonY = ypos(moonX);
+    moonUp = moonY + rMoon < horizon && phase > 0.04 && phase < 0.96;
+    if (moonUp) drawMoon(moonX, Math.round(moonY), phase, sky.night);
+  }
+  drawWeather(sky);
+  g.setClipRect(0, 0, w - 1, h - 1);
+
+  if (up) drawReflection(nowX, [1, 1, 0.3], rUp);
+  else if (moonUp && sky.night) drawReflection(moonX, [0.8, 0.8, 0.8], rMoon - 1);
+
+  drawPath(nowX);
+  drawAxis(nowMs, nowX, list);
   drawBall(nowX, nowY, up);
-  drawAppt(now.getTime());
+
+  const next = nextAppointment(list);
+  if (next) {
+    g.setFont('Vector', 18);
+    g.setFontAlign(-1, -1, 0);
+    drawEvent(next, nowMs, h - 1, 2, true);
+  }
   drawClock(now);
-}
+};
 
 /* ---------------------------------------------------------------------------
  *  Frame loop. We tick once a minute, aligned to the top of the minute, and
@@ -597,38 +697,69 @@ function renderScreen () {
  * ------------------------------------------------------------------------- */
 let drawTimeout;
 
-function queueNext () {
+const queueNext = function () {
   if (drawTimeout) clearTimeout(drawTimeout);
   drawTimeout = setTimeout(function () {
     drawTimeout = undefined;
     tick();
   }, 60000 - (Date.now() % 60000));
-}
+};
 
-function tick () {
-  if (Math.floor(Date.now() / 86400000) !== sunDay) computeSun(); // day rollover
-  const scanned = apptScanAt;
-  refreshAppts();
-  if (apptScanAt !== scanned) weather = loadWeather(); // same cadence as calendar
+const tick = function () {
+  const now = Date.now();
+  if (Math.floor(now / 86400000) !== sunDay) computeSun(); // day rollover
+  if (scanAt === 0 || (now - scanAt) > RESCAN_MS) {
+    appts = scanAppointments();
+    weather = loadWeather();
+    scanAt = now;
+  }
   renderScreen();
   queueNext();
-}
+};
 
-Bangle.on('lcdPower', function (on) {
+const onLcdPower = function (on) {
   if (on) {
     tick();
   } else if (drawTimeout) {
     clearTimeout(drawTimeout);
     drawTimeout = undefined;
   }
+};
+
+const closeList = function () {
+  if (listTimeout) clearTimeout(listTimeout);
+  listTimeout = undefined;
+};
+
+const onTouch = function () {
+  if (listTimeout) {
+    closeList();
+  } else {
+    listTimeout = setTimeout(function () {
+      listTimeout = undefined;
+      renderScreen();
+    }, LIST_MS);
+  }
+  renderScreen();
+};
+
+Bangle.setUI({
+  mode: 'clock',
+  touch: onTouch,
+  remove: function () {
+    if (drawTimeout) clearTimeout(drawTimeout);
+    drawTimeout = undefined;
+    closeList();
+    Bangle.removeListener('lcdPower', onLcdPower);
+    g.reset();
+  }
 });
+Bangle.on('lcdPower', onLcdPower);
+Bangle.loadWidgets();
 
-function main () {
-  g.setBgColor(0, 0, 0);
-  g.clear();
-  Bangle.drawWidgets();
-  computeSun();
-  tick();
+g.setBgColor(0, 0, 0);
+g.clearRect(0, skyTop, w - 1, h - 1);
+Bangle.drawWidgets();
+computeSun();
+tick();
 }
-
-main();

@@ -12,3 +12,9 @@
       Smaller sun, especially below the horizon. Outlined text for readability.
       Sun path peaks at solar noon with a flat horizon that it crosses at
       sunrise/sunset. Don't redraw while the screen is off.
+0.22: Event and forecast-rain bars along the horizon, with a marker for now.
+      Events show "in 25m" when close and "til 14:00" while on; tap for a list.
+      Dithered gradient sky using civil twilight, a sea with reflections,
+      a moon with its phase, quieter sun path and consistent fonts.
+      Supports fast loading, 12 hour time, and settings to turn off weather,
+      calendar and moon.

@@ -2,7 +2,7 @@
   "id": "sunrise",
   "name": "Sunrise",
   "shortName": "Sunrise",
-  "version": "0.21",
+  "version": "0.22",
   "type": "clock",
   "author": "radare",
   "description": "Show sunrise and sunset times",
@@ -19,9 +19,18 @@
       "url": "app.js"
     },
     {
+      "name": "sunrise.settings.js",
+      "url": "settings.js"
+    },
+    {
       "name": "sunrise.img",
       "url": "app-icon.js",
       "evaluate": true
+    }
+  ],
+  "data": [
+    {
+      "name": "sunrise.json"
     }
   ],
   "screenshots": [

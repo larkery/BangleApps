@@ -2,21 +2,27 @@
 
 This app mimics the Apple Watch watchface that shows the sunrise and sunset time.
 
-This is a work-in-progress app, so you may expect missfeatures, bugs and heavy
-battery draining. There's still a lot of things to optimize and improve, so take
-this into account before complaining :-)
-
 * Requires to configure the location in Settings -> Apps -> My Location
-* Shows sea level and make the sun/moon glow depending on the x position
-* The sun's path peaks at solar noon, and the horizon is placed so the sun crosses it at sunrise and sunset
-* Shows the next calendar event (synced by Gadgetbridge) starting within the next day along the bottom
-* If the weather app has data, shows clouds/rain/snow/fog in the sky
+* The sun (and moon, with its phase) follow a path that peaks at solar noon; the
+  horizon is placed so the sun crosses it at sunrise and sunset, and the sky
+  colours follow civil twilight
+* The horizon is a time axis for the next 24 hours (left of the white triangle
+  is tomorrow): yellow bars are calendar events, cyan bars are hours with rain
+  forecast
+* Shows the next calendar event (synced by Gadgetbridge) starting within the
+  next day along the bottom: "in 25m" when it's close, "til 14:00" while it's
+  on, and a cyan "+" if it's tomorrow
+* Tap the screen to list everything coming up in the next day
+* If the weather app has data, shows clouds/rain/snow/fog in the sky. Rain
+  forecast bars need the weather app's data type set to "forecast"
+* Settings -> Apps -> Sunrise turns weather, calendar and the moon on or off
+* Follows the 12/24 hour setting, and supports fast loading
 
 ## TODO
 
-* Improved gradients and add support for banglejs1
-* Faster rendering, by reducing sinus stepsize, only refreshing whats needed, etc
-* Show red vertical lines or dots inside the sinus if there are alarms
+* Add support for banglejs1
+* Faster rendering, by only refreshing whats needed, etc
+* Show alarms on the time axis
 
 ## Author
 
