@@ -112,10 +112,7 @@ function loadWeather () {
     const json = require('Storage').readJSON('weather.json', 1);
     const wx = json && json.weather;
     if (!wx || (wx.time && Date.now() - wx.time > WEATHER_MAX_AGE_MS)) return null;
-    return {
-      scene: weatherScene(wx.code, wx.txt),
-      temp: (wx.temp !== undefined) ? wx.temp - 273.15 : undefined // stored in Kelvin
-    };
+    return { scene: weatherScene(wx.code, wx.txt) };
   } catch (e) {
     return null;
   }
@@ -477,7 +474,7 @@ function drawSinuses () {
 
 /* Next calendar event, along the bottom. Centred if it fits on one line,
  * otherwise wrapped (up to APPT_LINES lines) and left-aligned. The start time
- * is yellow, prefixed with a cyan "Tmw" if it's tomorrow. */
+ * is yellow, prefixed with a cyan "+" if it's tomorrow. */
 const APPT_LINES = 2;
 
 function drawAppt (nowMs) {
@@ -486,10 +483,10 @@ function drawAppt (nowMs) {
 
   const when = new Date(a.start);
   const tomorrow = a.start > nowMs && when.getDate() !== new Date(nowMs).getDate();
-  const tmwStr = tomorrow ? 'Tmw ' : '';
+  const tmwStr = tomorrow ? '+' : '';
   const timeStr = a.allDay ? '' : formatAsTime(when.getHours(), when.getMinutes()) + ' ';
 
-  g.setFont('6x15');
+  g.setFont('Vector', 18);
   g.setFontAlign(-1, -1, 0);
   const maxW = w - 8;
   let lines = g.wrapString(tmwStr + timeStr + a.msg, maxW);
@@ -507,7 +504,7 @@ function drawAppt (nowMs) {
   g.setColor(1, 1, 1);
   for (let i = 0; i < lines.length; i++) g.drawString(lines[i], x, y + i * lh);
   // recolour the prefix on the first line by drawing over it
-  if (lines[0].indexOf(tmwStr + timeStr) === 0) {
+  if (lines[0].indexOf((tmwStr + timeStr).trim()) === 0) { // wrapping may trim the trailing space
     g.setColor(0, 1, 1);
     g.drawString(tmwStr, x, y);
     g.setColor(1, 1, 0);
@@ -567,20 +564,6 @@ function drawClock (now) {
   g.fillPoly(arrow);
   if (!isNaN(nextSun.getTime()))
     drawOutlined(formatAsTime(nextSun.getHours(), nextSun.getMinutes()), ax + aw + 4, ty);
-
-  // Temperature, under the time on the right.
-  if (weather && weather.temp !== undefined) {
-    let str;
-    try {
-      str = require('locale').temp(weather.temp, 0);
-    } catch (e) {
-      str = Math.round(weather.temp) + '\'C';
-    }
-    g.setFont('6x15');
-    g.setFontAlign(1, -1, 0);
-    drawOutlined(str, w - 4, 64);
-    g.setFontAlign(-1, -1, 0);
-  }
 }
 
 function renderScreen () {

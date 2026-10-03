@@ -10,7 +10,7 @@ this into account before complaining :-)
 * Shows sea level and make the sun/moon glow depending on the x position
 * The sun's path peaks at solar noon, and the horizon is placed so the sun crosses it at sunrise and sunset
 * Shows the next calendar event (synced by Gadgetbridge) starting within the next day along the bottom
-* If the weather app has data, shows clouds/rain/snow/fog in the sky and the temperature
+* If the weather app has data, shows clouds/rain/snow/fog in the sky
 
 ## TODO
 
