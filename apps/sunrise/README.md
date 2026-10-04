@@ -7,8 +7,8 @@ This app mimics the Apple Watch watchface that shows the sunrise and sunset time
   horizon is placed so the sun crosses it at sunrise and sunset, and the sky
   colours follow civil twilight
 * The horizon is a time axis for the next 24 hours (left of the white triangle
-  is tomorrow): yellow bars are calendar events, cyan bars are hours with rain
-  forecast
+  is tomorrow): calendar events are yellow bars today and magenta tomorrow,
+  and cyan bars are hours with rain forecast
 * Shows the next calendar event (synced by Gadgetbridge) starting within the
   next day along the bottom: "in 25m" when it's close, "til 14:00" while it's
   on, and a cyan "+" if it's tomorrow

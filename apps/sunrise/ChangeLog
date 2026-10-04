@@ -18,3 +18,5 @@
       a moon with its phase, quieter sun path and consistent fonts.
       Supports fast loading, 12 hour time, and settings to turn off weather,
       calendar and moon.
+0.23: Tomorrow's events are magenta on the time axis, and the now marker sits
+      above the horizon so it doesn't cover the reflection.

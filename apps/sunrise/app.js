@@ -478,39 +478,39 @@ const drawPath = function (nowX) {
 };
 
 // Mark a span of time along the axis below the horizon. The axis is the next
-// 24 hours, so anything left of "now" is tomorrow.
-const drawSpan = function (startMs, endMs, nowMs, y) {
+// 24 hours, so anything left of "now" is tomorrow: the part of the span
+// before midnight is drawn in col, the part after in tmwCol.
+const drawSpan = function (startMs, endMs, nowMs, midMs, y, col, tmwCol) {
   startMs = Math.max(startMs, nowMs);
   endMs = Math.min(endMs, nowMs + WINDOW_MS);
   if (endMs <= startMs) return;
-  if (endMs - startMs > WINDOW_MS - 600000) return g.fillRect(0, y, w - 1, y + 1);
-  const xs = Math.round(xOfMs(startMs));
-  let xe = Math.round(xOfMs(endMs));
-  if (xe === xs) xe = xs + 1;
-  if (xe > xs) {
+  const bar = function (xs, xe, c) {
+    xs = Math.round(xs);
+    xe = Math.max(Math.round(xe), xs + 1);
+    g.setColor.apply(g, c);
     g.fillRect(xs, y, xe, y + 1);
-  } else { // wraps past midnight
-    g.fillRect(xs, y, w - 1, y + 1);
-    g.fillRect(0, y, xe, y + 1);
-  }
+  };
+  if (startMs < midMs) bar(xOfMs(startMs), endMs >= midMs ? w - 1 : xOfMs(endMs), col);
+  if (endMs > midMs) bar(startMs > midMs ? xOfMs(startMs) : 0, xOfMs(endMs), tmwCol);
 };
 
-// Horizon line, then below it: today's timed events (yellow), forecast rain
-// (cyan) and a little triangle for now.
+// Horizon line with a little triangle above it for now, then below it:
+// timed events (yellow today, magenta tomorrow) and forecast rain (cyan).
 const drawAxis = function (nowMs, nowX, list) {
   g.setColor(0, 0.5, 1);
   g.fillRect(0, horizon, w - 1, horizon + 1);
 
-  g.setColor(1, 1, 0);
-  for (const a of list) if (!a.allDay) drawSpan(a.start, a.end, nowMs, horizon + 3);
-
+  const now = new Date(nowMs);
+  const midMs = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+  for (const a of list) {
+    if (!a.allDay) drawSpan(a.start, a.end, nowMs, midMs, horizon + 3, YELLOW, MAGENTA);
+  }
   if (weather) {
-    g.setColor(0, 1, 1);
-    for (const r of weather.rain) drawSpan(r[0], r[1], nowMs, horizon + 6);
+    for (const r of weather.rain) drawSpan(r[0], r[1], nowMs, midMs, horizon + 6, CYAN, CYAN);
   }
 
   g.setColor(1, 1, 1);
-  const tri = [nowX, horizon + 3, nowX - 4, horizon + 10, nowX + 4, horizon + 10];
+  const tri = [nowX, horizon - 2, nowX - 4, horizon - 9, nowX + 4, horizon - 9];
   g.fillPoly(tri);
   g.setColor(0, 0, 0);
   g.drawPoly(tri, true);
@@ -537,6 +537,7 @@ const drawBall = function (x, y, up) {
 
 const YELLOW = [1, 1, 0];
 const CYAN = [0, 1, 1];
+const MAGENTA = [1, 0, 1];
 
 // Coloured prefix for an event:
 //   "til 14:00" if it's on now, "in 25m" if it's within the hour,
