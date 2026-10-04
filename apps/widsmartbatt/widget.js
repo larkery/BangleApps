@@ -18,8 +18,10 @@
     return COLORS.low;
   };
 
-  function draw() {
-  let batt=E.getBattery();
+  const s = 29;
+  let lastKey; // what we last drew, so the minute check can skip redrawing if nothing changed
+
+  function getText(batt) {
   let data = require("smartbatt").get();
   let hrsLeft=data.hrsLeft;
   let days = hrsLeft / 24;
@@ -31,10 +33,20 @@
       : Math.round(hrsLeft) + "h");
   if(batt<=5&&!showPercent) txt="!";
   if(Bangle.isCharging()) txt=E.getBattery();
-  let s = 29;
+  return txt;
+  }
+
+  function getKey(batt, txt) {
+    return txt + "," + levelColor(batt) + "," + ((batt * (s - 12) / 100)|0);
+  }
+
+  function draw() {
+  let batt=E.getBattery();
+  let txt = getText(batt);
+  lastKey = getKey(batt, txt);
   let x = this.x, y = this.y;
   let xl = x + 4 + batt * (s - 12) / 100;
-  
+
   // Drawing code follows...
   g.setColor(COLORS.bg);
   g.fillRect(x + 2, y + 5, x + s - 6, y + 18);
@@ -85,7 +97,14 @@
     WIDGETS["widsmartbatt"].draw();
   });
   
-  setInterval(() => WIDGETS["widsmartbatt"].draw(), 60000);
+  // Check on the minute so we wake at the same time as the clock rather than separately,
+  // and only redraw (and update the LCD) if what we'd show has actually changed
+  function tick() {
+    setTimeout(tick, 60000 - (Date.now() % 60000));
+    let batt = E.getBattery();
+    if (getKey(batt, getText(batt)) !== lastKey) WIDGETS["widsmartbatt"].draw();
+  }
+  setTimeout(tick, 60000 - (Date.now() % 60000));
 
   
 })();

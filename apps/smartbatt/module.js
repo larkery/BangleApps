@@ -49,8 +49,9 @@
         var newBatt = (batt + data.battLastRecorded) / 2;
         data.battLastRecorded = newBatt;
       } else {
-        //probably charged, ignore average
+        //probably charged, ignore average and restart the measurement period from now
         data.battLastRecorded = batt;
+        data.timeLastRecorded = now;
       }
 
       storage.writeJSON(dataFile, data);
@@ -101,14 +102,16 @@
 
 
 
+  // cached so the widget doesn't read Storage every minute - recordBattery updates this object in place
+  var cachedData;
   function getData() {
-    return storage.readJSON(dataFile, 1) || {
+    return cachedData || (cachedData = storage.readJSON(dataFile, 1) || {
       avgBattDrainage: 0,
       battLastRecorded: E.getBattery(),
       timeLastRecorded: Date.now(),
       totalCycles: 0,
       totalHours: 0,
-    };
+    });
   }
 
 
@@ -132,11 +135,15 @@
   function deleteData() {
     storage.erase(dataFile);
     storage.erase(logFile);
+    cachedData = undefined;
   }
   // Expose public API
   exports.deleteData = deleteData;
   exports.get = getExportData;
   
-  // Start recording every 8 hours for accurate long tracking
-  recordBattery(); // Log immediately
+  // This module is loaded again by the widget on every app load, so only record once
+  // the update interval has passed - otherwise we'd write to flash every time an app opens
+  let firstRecord = getData().timeLastRecorded + getSettings().updateInterval - Date.now();
+  if (firstRecord > 0 && storage.read(dataFile)!==undefined) setTimeout(recordBattery, firstRecord);
+  else recordBattery();
 }

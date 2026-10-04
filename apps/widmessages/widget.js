@@ -11,7 +11,8 @@ if ((require("Storage").readJSON("messages.settings.json", true) || {}).maxMessa
       }
       Bangle.removeListener("touch", this.touch);
       if (!this.width) return;
-      let settings = Object.assign({flash: true, maxMessages: 3}, require("Storage").readJSON("messages.settings.json", true) || {});
+      // cache settings - we're called every second while flashing, and reading Storage each time wastes power
+      let settings = this.s || (this.s = Object.assign({flash: true, maxMessages: 3}, require("Storage").readJSON("messages.settings.json", true) || {}));
       if (recall!==true || settings.flash) {
         const msgsShown = E.clip(this.srcs.length, 0, settings.maxMessages);
         g.reset("widget").clearRect(this.x, this.y, this.x+this.width, this.y+23);
@@ -34,7 +35,8 @@ if ((require("Storage").readJSON("messages.settings.json", true) || {}).maxMessa
             this.x+12+i*24, this.y+12, {rotate: 0/*force centering*/});
         }
       }
-      WIDGETS["messages"].i = setTimeout(() => WIDGETS["messages"].draw(WIDGETS["messages"], true), 1000);
+      // only redraw every second if flashing - otherwise nothing changes, so don't wake up
+      if (settings.flash) WIDGETS["messages"].i = setTimeout(() => WIDGETS["messages"].draw(WIDGETS["messages"], true), 1000);
       if (process.env.HWVERSION>1) Bangle.on("touch", this.touch);
     }, onMsg(type, msg) {
       let wid = WIDGETS["messages"];

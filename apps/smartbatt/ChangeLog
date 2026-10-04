@@ -2,3 +2,4 @@ v0.01: New app!
 v0.02: Add dynamic intervals, depending on total cycles recorded
 v0.03: Return more data inside of .get();
 v0.04: Return to fixed update intervals, added setting to change update interval, limit cycles to 60 for greater precision over longer period of time
+v0.05: Only record (and write to flash) when the update interval has passed, not on every app load. Cache data in RAM so the widget does not read Storage every minute. Restart the measurement period after charging

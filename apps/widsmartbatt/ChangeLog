@@ -1,2 +1,3 @@
 v0.01: New app!
 v0.02: Displays warning '!' if battery is 5 percent or less.
+v0.03: Check on the minute (in step with the clock) and only redraw when the display would change

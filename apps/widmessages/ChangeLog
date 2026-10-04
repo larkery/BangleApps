@@ -8,3 +8,4 @@
 0.07: Only load messages module if we have messages (30ms speed improvement)
 0.08: Add .remove method
       Adding .reset("widget") to support different colour widget bars
+0.09: Cache settings and don't wake every second when not flashing (saves power)
