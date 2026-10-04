@@ -20,3 +20,6 @@
       calendar and moon.
 0.23: Tomorrow's events are magenta on the time axis, and the now marker sits
       above the horizon so it doesn't cover the reflection.
+0.24: Redraws in under half the time to save battery: the sun's path, waves
+      and rain are drawn once and cached, the sky gradient is cached, and the
+      calendar is only re-read when it changes.

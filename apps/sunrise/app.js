@@ -22,15 +22,20 @@ const lon = latlon.lon || 2.168;
 /* ---------------------------------------------------------------------------
  *  Calendar cache
  *  Reading + parsing the calendar JSON is the single most expensive thing this
- *  watch face does, so we do NOT do it every minute. Every RESCAN_MS we pull
- *  out the handful of events that could be relevant before the following
- *  scan, and each minute we just pick from that short list. That way the
- *  one-day look-ahead window slides smoothly between scans.
+ *  watch face does, so we do NOT do it every minute. Every RESCAN_MS we
+ *  check (cheaply, by hash) whether it's changed, and only if it has, or
+ *  REPARSE_MS has passed, do we pull out the handful of events that could be
+ *  relevant before the next parse. Each minute we just pick from that short
+ *  list, so the one-day look-ahead window slides smoothly between parses.
  * ------------------------------------------------------------------------- */
 const RESCAN_MS = 10 * 60 * 1000;          // 10 minutes
+const REPARSE_MS = 60 * 60 * 1000;         // an hour
 const WINDOW_MS = 24 * 60 * 60 * 1000;     // only show things within a day
+const CAL_FILE = /^android\.calendar\.json$/;
 let appts = [];
 let scanAt = 0;
+let parseAt = 0;
+let calHash;
 
 const scanAppointments = function () {
   const list = [];
@@ -38,7 +43,7 @@ const scanAppointments = function () {
   try {
     const events = storage.readJSON('android.calendar.json', 1) || [];
     const nowSec = Date.now() / 1000;
-    const latest = nowSec + (WINDOW_MS + RESCAN_MS) / 1000;
+    const latest = nowSec + (WINDOW_MS + REPARSE_MS) / 1000;
     for (const e of events) {
       if (!e.timestamp || e.timestamp > latest) continue;
       const end = e.timestamp + (e.durationInSeconds || 0);
@@ -228,10 +233,14 @@ let noonX;
 let riseT, setT, dawnT, duskT;
 let horizon;       // y of the horizon
 let sunDay = -1;   // UTC day index the above were computed for
+let pathPts;       // the sun's path as a polyline, x every PATH_STEP px
+let pathFrom, pathTo; // range of points above the horizon (inclusive)
+let pathDots;      // dotted path as a 1bpp image, drawn clipped (see drawPath)
+let waves;         // wave marks on the sea as a 1bpp image
+const PATH_STEP = 2;
 
 const hourOf = d => d.getHours() + d.getMinutes() / 60;
 const xfromTime = t => (w / 24) * t;
-const xOfMs = ms => xfromTime(hourOf(new Date(ms)));
 
 const ypos = function (x) {
   return oy - amp * Math.cos(((x - noonX) / w) * 2 * Math.PI);
@@ -255,6 +264,49 @@ const computeSun = function () {
   if (isNaN(dawnT) || dawnT > riseT) dawnT = isNaN(riseT) ? 0 : riseT - FALLBACK_TWILIGHT;
   if (isNaN(duskT) || duskT < setT) duskT = isNaN(setT) ? 24 : setT + FALLBACK_TWILIGHT;
   sunDay = Math.floor(d.getTime() / 86400000);
+  buildPath();
+  waves = buildWaves();
+};
+
+// A full-width 1bpp image covering rows y0 to y1, to draw on with b and
+// then blit in whatever colour we like. Drawing these once and blitting them
+// is far cheaper than looping over lots of little shapes in JS every minute.
+const mkLayer = function (y0, y1, draw) {
+  const b = Graphics.createArrayBuffer(w, y1 - y0, 1, { msb: true });
+  draw(b);
+  return { width: w, height: y1 - y0, bpp: 1, transparent: 0, buffer: b.buffer, y: y0 };
+};
+const drawLayer = function (img) {
+  g.drawImage(img, 0, img.y);
+};
+
+// The sun's path only changes daily, so we work out the polyline and draw
+// the dots once here rather than evaluating the curve every frame.
+const buildPath = function () {
+  const n = (w / PATH_STEP | 0) + 1;
+  pathPts = new Float32Array(n * 2);
+  pathFrom = n; pathTo = -1;
+  for (let i = 0; i < n; i++) {
+    const x = i * PATH_STEP;
+    const y = ypos(x);
+    pathPts[i * 2] = x;
+    pathPts[i * 2 + 1] = y;
+    if (y < horizon) {
+      if (i < pathFrom) pathFrom = i;
+      pathTo = i;
+    }
+  }
+  const y0 = Math.floor(oy - amp) - 1;
+  pathDots = mkLayer(y0, Math.ceil(oy + amp) + 2, function (b) {
+    for (let i = 0; i < n; i++) {
+      const x = i * PATH_STEP;
+      if (x % 6) continue;
+      const y = pathPts[i * 2 + 1] - y0;
+      // big dots for the sun's path in the sky, small ones below the horizon
+      if (y + y0 >= horizon) b.setPixel(x, y);
+      else b.fillRect(x, y, x + 1, y + 1);
+    }
+  });
 };
 
 // Moon phase: 0 = new, 0.5 = full
@@ -318,41 +370,67 @@ const skyForTime = function (t) {
   if (above < 0) {
     // twilight: night -> dawn colours as the sun approaches the horizon
     const f = Math.max(0, 1 + above / Math.abs(sun - dark));
-    return { pal: lerpPal(PAL_NIGHT, PAL_DAWN, f), stars: 1 - f, night: f < 0.5 };
+    return { pal: lerpPal(PAL_NIGHT, PAL_DAWN, f), stars: 1 - f, night: f < 0.5, key: 'n' + f };
   }
-  if (above < GOLDEN) return { pal: lerpPal(PAL_DAWN, PAL_DAY, above / GOLDEN), stars: 0, glow: true };
-  return { pal: PAL_DAY, stars: 0 };
+  if (above < GOLDEN) return { pal: lerpPal(PAL_DAWN, PAL_DAY, above / GOLDEN), stars: 0, glow: true, key: 'g' + above };
+  return { pal: PAL_DAY, stars: 0, key: 'd' };
 };
 
+// The gradient only changes around dawn and dusk, so we keep the bands
+// (y0, y1, r, g, b) from last time and just redraw them if it's the same.
+let skyBands, skyKey;
+
 const drawSky = function (sky) {
-  const pal = sky.pal;
-  const n = pal.length - 1;
-  const step = 3;
-  for (let y = skyTop; y < horizon; y += step) {
-    const f = (y - skyTop) / (horizon - skyTop) * n;
-    const i = Math.min(n - 1, f | 0);
-    g.setColor.apply(g, lerpCol(pal[i], pal[i + 1], f - i));
-    g.fillRect(0, y, w - 1, Math.min(y + step - 1, horizon - 1));
+  const key = sky.key + horizon;
+  if (key !== skyKey) {
+    skyKey = key;
+    const bands = [];
+    const pal = sky.pal;
+    const n = pal.length - 1;
+    const step = 3;
+    for (let y = skyTop; y < horizon; y += step) {
+      const f = (y - skyTop) / (horizon - skyTop) * n;
+      const i = Math.min(n - 1, f | 0);
+      const c = lerpCol(pal[i], pal[i + 1], f - i);
+      const y1 = Math.min(y + step - 1, horizon - 1);
+      const k = bands.length - 5;
+      if (k >= 0 && bands[k + 2] === c[0] && bands[k + 3] === c[1] && bands[k + 4] === c[2]) bands[k + 1] = y1;
+      else bands.push(y, y1, c[0], c[1], c[2]);
+    }
+    skyBands = new Float32Array(bands);
+  }
+  const b = skyBands;
+  for (let i = 0; i < b.length; i += 5) {
+    g.setColor(b[i + 2], b[i + 3], b[i + 4]);
+    g.fillRect(0, b[i], w - 1, b[i + 1]);
   }
 };
 
 // The ground is a sea: dark blue fading to black, with little wave marks
 // that get longer and further apart as they come closer.
+const buildWaves = function () {
+  return mkLayer(horizon, h, function (b) {
+    let y = 14;
+    for (let k = 1; y < b.getHeight(); k++) {
+      const len = 2 + k;
+      const gap = 18 + 7 * k;
+      for (let x = (k * 37) % gap - gap; x < w; x += gap) b.fillRect(x, y, x + len, y);
+      y += 3 + 2 * k;
+    }
+  });
+};
+
 const drawSea = function () {
   const depth = Math.min(36, h - horizon);
-  for (let y = horizon; y < h; y += 2) {
-    const f = Math.max(0, 1 - (y - horizon) / depth);
-    g.setColor(0, 0, 0.45 * f);
+  let y = horizon;
+  for (; y < horizon + depth; y += 2) {
+    g.setColor(0, 0, 0.45 * (1 - (y - horizon) / depth));
     g.fillRect(0, y, w - 1, y + 1);
   }
+  g.setColor(0, 0, 0);
+  g.fillRect(0, y, w - 1, h - 1);
   g.setColor(0, 0.4, 0.8);
-  let y = horizon + 14;
-  for (let k = 1; y < h; k++) {
-    const len = 2 + k;
-    const gap = 18 + 7 * k;
-    for (let x = (k * 37) % gap - gap; x < w; x += gap) g.fillRect(x, y, x + len, y);
-    y += 3 + 2 * k;
-  }
+  drawLayer(waves);
 };
 
 // A shimmering column on the sea under the sun or moon.
@@ -395,22 +473,31 @@ const drawCloud = function (x, y, s, top, under) {
 
 // Weather goes in the sky behind the text: clouds, then rain/snow falling
 // from them down to the horizon, a lightning bolt, or bands of fog.
+const PRECIP_TOP = 56;
+let precip, precipKey; // rain/snow as a 1bpp image, redrawn if it changes
+
 const drawWeather = function (sky) {
   const sc = weather && weather.scene;
   if (!sc) return;
   const night = sky.night;
 
   if (sc.precip) {
-    const top = 56;
-    const span = horizon - top - 2;
-    const n = sc.precip === 'drizzle' ? 18 : 30;
-    g.setColor(night && sc.precip !== 'snow' ? 0 : 1, 1, 1);
-    for (let i = 0; i < n && span > 0; i++) {
-      const x = (i * 47 + 5) % w;
-      const y = top + (i * 29) % span;
-      if (sc.precip === 'snow') g.fillRect(x, y, x + 1, y + 1);
-      else g.drawLine(x, y, x - 2, y + (sc.precip === 'drizzle' ? 3 : 6));
+    const key = sc.precip + horizon;
+    if (precipKey !== key) {
+      precipKey = key;
+      precip = mkLayer(PRECIP_TOP, horizon, function (b) {
+        const span = horizon - PRECIP_TOP - 2;
+        const n = sc.precip === 'drizzle' ? 18 : 30;
+        for (let i = 0; i < n && span > 0; i++) {
+          const x = (i * 47 + 5) % w;
+          const y = (i * 29) % span;
+          if (sc.precip === 'snow') b.fillRect(x, y, x + 1, y + 1);
+          else b.drawLine(x, y, x - 2, y + (sc.precip === 'drizzle' ? 3 : 6));
+        }
+      });
     }
+    g.setColor(night && sc.precip !== 'snow' ? 0 : 1, 1, 1);
+    drawLayer(precip);
   }
 
   // white with a shadow by day, lit from below near sunrise/sunset, dim blue at night
@@ -460,38 +547,37 @@ const drawMoon = function (x, y, phase, night) {
 // The sun's path: solid for the part of the day that's gone, dotted for
 // what's to come, and dim dots where it's below the horizon.
 const drawPath = function (nowX) {
-  let px = 0;
-  let py = ypos(0);
-  for (let x = 2; x <= w; x += 2) {
-    const y = ypos(x);
-    if (y >= horizon) {
-      if (x % 6 === 0) { g.setColor(0, 0.5, 1); g.setPixel(x, y); }
-    } else if (x <= nowX) {
-      g.setColor(1, 1, 1);
-      g.drawLine(px, py, x, y);
-    } else if (x % 6 === 0) {
-      g.setColor(1, 1, 1);
-      g.fillRect(x, y, x + 1, y + 1);
-    }
-    px = x; py = y;
-  }
+  // solid line from just below the horizon up to now
+  const end = Math.min(pathTo, Math.floor(nowX / PATH_STEP));
+  const start = Math.max(0, pathFrom - 1);
+  g.setColor(1, 1, 1);
+  if (end > start) g.drawPoly(new Float32Array(pathPts.buffer, start * 8, (end - start + 1) * 2));
+  // dots: the future in the sky, and everything below the horizon
+  g.setClipRect(Math.floor(nowX) + 1, 0, w - 1, horizon - 1);
+  drawLayer(pathDots);
+  g.setColor(0, 0.5, 1);
+  g.setClipRect(0, horizon, w - 1, h - 1);
+  drawLayer(pathDots);
+  g.setClipRect(0, 0, w - 1, h - 1);
 };
 
 // Mark a span of time along the axis below the horizon. The axis is the next
 // 24 hours, so anything left of "now" is tomorrow: the part of the span
 // before midnight is drawn in col, the part after in tmwCol.
-const drawSpan = function (startMs, endMs, nowMs, midMs, y, col, tmwCol) {
-  startMs = Math.max(startMs, nowMs);
-  endMs = Math.min(endMs, nowMs + WINDOW_MS);
-  if (endMs <= startMs) return;
-  const bar = function (xs, xe, c) {
-    xs = Math.round(xs);
-    xe = Math.max(Math.round(xe), xs + 1);
-    g.setColor.apply(g, c);
-    g.fillRect(xs, y, xe, y + 1);
-  };
-  if (startMs < midMs) bar(xOfMs(startMs), endMs >= midMs ? w - 1 : xOfMs(endMs), col);
-  if (endMs > midMs) bar(startMs > midMs ? xOfMs(startMs) : 0, xOfMs(endMs), tmwCol);
+// Positions are worked out relative to now, so midnight is at x = w and
+// anything beyond that wraps round to the left.
+const bar = function (xs, xe, y, c) {
+  xs = Math.round(xs);
+  xe = Math.max(Math.round(xe), xs + 1);
+  g.setColor(c[0], c[1], c[2]);
+  g.fillRect(xs, y, xe, y + 1);
+};
+const drawSpan = function (startMs, endMs, nowMs, nowX, y, col, tmwCol) {
+  const xs = nowX + (Math.max(startMs, nowMs) - nowMs) * w / WINDOW_MS;
+  const xe = nowX + (Math.min(endMs, nowMs + WINDOW_MS) - nowMs) * w / WINDOW_MS;
+  if (xe <= xs) return;
+  if (xs < w) bar(xs, xe >= w ? w - 1 : xe, y, col);
+  if (xe > w) bar(Math.max(xs, w) - w, xe - w, y, tmwCol);
 };
 
 // Horizon line with a little triangle above it for now, then below it:
@@ -500,13 +586,11 @@ const drawAxis = function (nowMs, nowX, list) {
   g.setColor(0, 0.5, 1);
   g.fillRect(0, horizon, w - 1, horizon + 1);
 
-  const now = new Date(nowMs);
-  const midMs = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
   for (const a of list) {
-    if (!a.allDay) drawSpan(a.start, a.end, nowMs, midMs, horizon + 3, YELLOW, MAGENTA);
+    if (!a.allDay) drawSpan(a.start, a.end, nowMs, nowX, horizon + 3, YELLOW, MAGENTA);
   }
   if (weather) {
-    for (const r of weather.rain) drawSpan(r[0], r[1], nowMs, midMs, horizon + 6, CYAN, CYAN);
+    for (const r of weather.rain) drawSpan(r[0], r[1], nowMs, nowX, horizon + 6, CYAN, CYAN);
   }
 
   g.setColor(1, 1, 1);
@@ -710,7 +794,12 @@ const tick = function () {
   const now = Date.now();
   if (Math.floor(now / 86400000) !== sunDay) computeSun(); // day rollover
   if (scanAt === 0 || (now - scanAt) > RESCAN_MS) {
-    appts = scanAppointments();
+    const hash = settings.calendar && storage.hash(CAL_FILE);
+    if (hash !== calHash || (now - parseAt) > REPARSE_MS) {
+      appts = scanAppointments();
+      calHash = hash;
+      parseAt = now;
+    }
     weather = loadWeather();
     scanAt = now;
   }
