@@ -4,18 +4,19 @@ Prompts you through the day to tap what's been true **since the last check-in**.
 
 ## Using it
 
-- **Grid:** tap icons to toggle them (green = yes). Water and coffee show how many times you've logged them today.
+- **Grid:** tap icons to toggle them (green = yes). Water and coffee show how many times you've logged them today. Swipe left or right to switch between two pages. The most-used items are on the first page, which every prompt opens on.
 
-  | | | |
-  |---|---|---|
-  | Water | Coffee | Food |
-  | Spoke | Moved | Outside |
-  | Sad | Frustrated | Happy |
+  | Page 1 | | | Page 2 | | |
+  |---|---|---|---|---|---|
+  | Water | Coffee | Food | Connection | Loneliness | Self-esteem |
+  | Spoke | Moved | Outside | Tired | Frustrated | Fear/anxiety |
+  | Sad | Happy | Equanimity | Pain | Joy | Stressed |
 
-- **Detail:** press and hold Sad, Frustrated or Happy to open a second grid: Pain, Tired, Fear/anxiety, Joy, Equanimity, Connection, Loneliness, Self-esteem. Tap Back to return. The corner of the mood icons turns yellow when anything on this grid is set.
-- **Button:** saves. On the sleep screen it skips.
+- **Page dots:** the dots at the top show which page you're on. The other page's dot turns yellow when anything on it is set.
+- **Button:** saves. On the sleep screen it skips. For 1.5s after a prompt pops up the button is ignored, so pressing it to wake the screen does nothing.
+- **Busy:** double-press the button on a prompt to log `busy` (or `sleep_busy`) and be asked again in 45 minutes. Quiet hours still apply. Because of this, a single press on a prompt saves after a short pause.
 - **Sleep:** tap Good / OK / Not good.
-- **Timeout:** if you don't answer in time, anything you toggled is saved. If nothing was toggled, a `missed` row is logged.
+- **Timeout:** if you don't answer in time, anything you toggled is saved. If nothing was toggled, a `missed` row is logged. But if a timed calendar event (synced from Gadgetbridge, not all-day, under 3 hours) was on during the prompt, a `busy` row is logged instead and you're asked again 5 minutes after the event ends. Quiet hours still apply.
 - **Log now:** open Mood Log from the launcher at any time. This logs a `manual` row and restarts the timer. If you press the button with nothing toggled, nothing is logged.
 
 ## When it prompts
@@ -28,17 +29,16 @@ Prompts are scheduled with the **Scheduler** (`sched`) library, one at a time: e
 
 ## CSV columns
 
-Data goes to `moodlog2.csv`. Version 0.02 and earlier wrote `moodlog.csv`, which uses different columns. It's left in place and can still be downloaded.
+Data goes to `moodlog3.csv`. Older versions wrote `moodlog2.csv` (0.03 to 0.06: the same columns without `stressed`) and `moodlog.csv` (0.02 and earlier: different columns). Both are left in place and can still be downloaded.
 
 | column | meaning |
 |---|---|
-| schema | format version (2) |
-| type | checkin, manual, missed, sleep, sleep_missed, sleep_skipped |
+| schema | format version (3) |
+| type | checkin, manual, missed, busy, sleep, sleep_missed, sleep_skipped, sleep_busy |
 | time | local time with UTC offset |
 | unix | seconds since epoch |
-| latency_s | seconds from buzz to answer (blank for manual/missed) |
-| water, coffee, food, spoke, moved, outside, sad, frustrated, happy | main grid: 1/0, blank if not answered |
-| pain, tired, fear_anxiety, joy, equanimity, connection, loneliness, self_esteem | detail grid: 1/0, blank if not answered |
+| latency_s | seconds from buzz to answer, or to saying busy (blank for manual/missed, and for busy rows logged because of a calendar event) |
+| water, coffee, food, spoke, moved, outside, sad, frustrated, happy, pain, tired, fear_anxiety, joy, equanimity, connection, loneliness, self_esteem, stressed | 1/0, blank if not answered |
 | sleep | 2 good, 1 OK, 0 not good, sleep rows only |
 
 The window for each answer runs from the previous *answered* row. Missed rows don't reset it.
@@ -61,6 +61,6 @@ The window for each answer runs from the previous *answered* row. Missed rows do
 Also write a file called `moodlog.info` containing:
 `{"id":"moodlog","name":"Mood Log","src":"moodlog.app.js","icon":"moodlog.img"}`
 
-The icon is optional. Reboot the watch afterwards. To get your data, download `moodlog2.csv` from the IDE's Storage menu.
+The icon is optional. Reboot the watch afterwards. To get your data, download `moodlog3.csv` from the IDE's Storage menu.
 
 If you uninstall Mood Log, also delete its entry from `sched.json` (or reinstall and uninstall the Scheduler), or the leftover alarm will throw an error once.

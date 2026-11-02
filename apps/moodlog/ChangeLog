@@ -1,3 +1,7 @@
 0.01: First version
 0.02: Use Scheduler library instead of polling; sleep prompt at fixed delay after quiet hours
 0.03: New grid layout (incl. food and outside) with detailed emotions (press and hold), button saves, water/coffee daily counts, no overall rating. Logs to moodlog2.csv (schema 2)
+0.04: Ignore the button for 1.5s after a prompt pops up, so a press to wake the screen does not save an empty check-in
+0.05: Double-press the button on a prompt to log "busy" and be asked again in 45 minutes
+0.06: A check-in missed during a timed calendar event (under 3 hours) logs "busy" and asks again 5 minutes after the event ends
+0.07: 3x3 grid on two swipeable pages, most-used items first. Adds Stressed. Logs to moodlog3.csv (schema 3, adds stressed column)

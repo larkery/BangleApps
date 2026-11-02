@@ -33,11 +33,12 @@ exports.scheduleAt = function(kind, t) {
   S.writeJSON(SF, st);
 };
 
-// Next check-in: interval +/- jitter from now. If that would run into
-// quiet hours, schedule the morning sleep prompt instead.
-exports.scheduleNext = function() {
+// Next check-in: interval +/- jitter from now, or exactly `mins` from now if
+// given. If that would run into quiet hours, schedule the morning sleep
+// prompt instead.
+exports.scheduleNext = function(mins) {
   var c = cfg(), now = Date.now();
-  var t = now + Math.max(10, c.interval + (Math.random() * 2 - 1) * c.jitter) * 60000;
+  var t = now + (mins || Math.max(10, c.interval + (Math.random() * 2 - 1) * c.jitter)) * 60000;
   if (c.qStart != c.qEnd) {
     var qs = inQuiet(c, now) ? now : nextHour(now, c.qStart);
     if (qs <= t) {

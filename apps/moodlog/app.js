@@ -2,7 +2,7 @@
 var S = require("Storage");
 var ML = require("moodlog");
 
-var ST_FILE = "moodlog.state.json", CSV = "moodlog2.csv";
+var ST_FILE = "moodlog.state.json", CSV = "moodlog3.csv";
 var CFG = ML.cfg();
 var st = S.readJSON(ST_FILE, 1) || {};
 var mode = st.pending || "manual";   // "checkin" | "sleep" | "manual"
@@ -13,13 +13,16 @@ S.writeJSON(ST_FILE, st);
 var W = g.getWidth(), H = g.getHeight();
 var CS = Math.floor(W / 3), M = Math.floor((W - 3 * CS) / 2);
 var TOP = 30, BH = Math.floor((H - TOP) / 3);
-var MAIN = ["water", "coffee", "food", "spoke", "moved", "outside", "sad", "frustrated", "happy"];
-var DETAIL = ["pain", "tired", "fear", "joy", "equanimity", "connection", "loneliness", "self_esteem", "back"];
-var COLS = MAIN.concat(DETAIL.slice(0, 8)); // CSV column order
-var EMO = {sad: 1, frustrated: 1, happy: 1}; // press and hold for DETAIL
-var LONG_MS = 600;
+// Swipe left/right between pages. Page 1 has the most-used items.
+var PAGES = [
+  ["water", "coffee", "food", "spoke", "moved", "outside", "sad", "happy", "equanimity"],
+  ["connection", "loneliness", "self_esteem", "tired", "frustrated", "fear", "pain", "joy", "stressed"]
+];
+var COLS = ["water", "coffee", "food", "spoke", "moved", "outside", "sad", "frustrated", "happy",
+  "pain", "tired", "fear", "joy", "equanimity", "connection", "loneliness", "self_esteem", "stressed"]; // CSV column order
 var toggles = {};
-var stage = (mode == "sleep") ? "rate" : "grid"; // "grid" | "detail" | "rate"
+var stage = (mode == "sleep") ? "rate" : "grid"; // "grid" | "rate"
+var page = 0;
 var finished = false;
 
 // ---------- today's counts ----------
@@ -123,15 +126,16 @@ var ICONS = {
     }
     g.fillPoly(p);
   }],
-  back: ["Back", function(x, y) {
-    g.fillPoly([x - 12, y, x - 2, y - 9, x - 2, y - 4, x + 11, y - 4, x + 11, y + 4, x - 2, y + 4, x - 2, y + 9]);
+  stressed: ["Stressed", function(x, y) { // flat mouth, sweat drop
+    face(x, y); g.fillRect(x - 5, y + 5, x + 5, y + 6);
+    g.fillCircle(x + 15, y - 2, 3); g.fillPoly([x + 12, y - 2, x + 15, y - 9, x + 18, y - 2]);
   }]
 };
 
 // ---------- drawing ----------
-function cells() { return stage == "detail" ? DETAIL : MAIN; }
-function anyDetail() {
-  for (var i = 0; i < 8; i++) if (toggles[DETAIL[i]]) return true;
+function cells() { return PAGES[page]; }
+function anyOn(p) {
+  for (var i = 0; i < 9; i++) if (toggles[PAGES[p][i]]) return true;
   return false;
 }
 function anyToggled() {
@@ -142,14 +146,15 @@ function drawCell(i) {
   var name = cells()[i];
   var col = i % 3, row = Math.floor(i / 3);
   var x = M + col * CS, y = M + row * CS, cx = x + CS / 2, cy = y + CS / 2 - 6;
-  var on = toggles[name], bg, fg;
-  if (name == "back") { bg = "#00f"; fg = "#fff"; }
-  else if (on) { bg = "#0f0"; fg = "#000"; }
-  else { bg = "#000"; fg = "#fff"; }
+  var on = toggles[name], bg = on ? "#0f0" : "#000", fg = on ? "#000" : "#fff";
   g.setColor(bg).fillRect(x + 2, y + 2, x + CS - 3, y + CS - 3);
-  g.setColor(on || name == "back" ? bg : "#888").drawRect(x + 2, y + 2, x + CS - 3, y + CS - 3);
-  if (EMO[name]) { // corner fold: hold for more. Yellow if any detail is set.
-    g.setColor(anyDetail() ? "#ff0" : "#888").fillPoly([x + CS - 13, y + 3, x + CS - 4, y + 3, x + CS - 4, y + 12]);
+  g.setColor(on ? bg : "#888").drawRect(x + 2, y + 2, x + CS - 3, y + CS - 3);
+  if (i == 1) { // page dots: current one filled, the other yellow if anything on it is set
+    for (var p = 0; p < PAGES.length; p++) {
+      var dx = cx + (p * 2 - PAGES.length + 1) * 5;
+      if (p == page) g.setColor(fg).fillCircle(dx, y + 7, 2);
+      else g.setColor(anyOn(p) ? "#ff0" : "#888").drawCircle(dx, y + 7, 2);
+    }
   }
   g.setColor(fg);
   ICONS[name][1](cx, cy);
@@ -181,14 +186,14 @@ function isoLocal(d) {
     pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) +
     sign + pad(Math.floor(off / 60)) + ":" + pad(off % 60);
 }
-function writeRow(type, flags, sleep) {
+function writeRow(type, flags, sleep, auto) {
   var fresh = S.open(CSV, "r").readLine() === undefined;
   var f = S.open(CSV, "a");
   if (fresh) f.write("schema,type,time,unix,latency_s," + COLS.join(",").replace("fear", "fear_anxiety") + ",sleep\n");
   var d = new Date();
-  var lat = (mode == "manual" || type.indexOf("missed") >= 0) ? "" : Math.round((d.getTime() - shownAt) / 1000);
+  var lat = (auto || mode == "manual" || type.indexOf("missed") >= 0) ? "" : Math.round((d.getTime() - shownAt) / 1000);
   var cols = COLS.map(function(k) { return flags ? (flags[k] ? 1 : 0) : ""; });
-  var row = [2, type, isoLocal(d), Math.floor(d.getTime() / 1000), lat].concat(cols, [sleep]);
+  var row = [3, type, isoLocal(d), Math.floor(d.getTime() / 1000), lat].concat(cols, [sleep]);
   f.write(row.join(",") + "\n");
   if (flags) { // keep today's water/coffee totals in the state file
     var s = S.readJSON(ST_FILE, 1) || {}, c = todayCounts(s);
@@ -197,14 +202,20 @@ function writeRow(type, flags, sleep) {
     S.writeJSON(ST_FILE, s);
   }
 }
-function finish(type, flags, sleep) {
+var BUSY_MINS = 45;
+// `until` (ms) is set when a calendar event made us busy: ask again then.
+function finish(type, flags, sleep, until) {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
-  if (type) writeRow(type, flags, sleep);
+  if (type) writeRow(type, flags, sleep, until);
+  // Busy asks again soon: the sleep prompt as itself, a check-in via
+  // scheduleNext so quiet hours still apply.
+  if (type == "sleep_busy") ML.scheduleAt("sleep", Date.now() + BUSY_MINS * 60000);
+  else if (type == "busy") ML.scheduleNext(until ? Math.max(1, (until - Date.now()) / 60000) : BUSY_MINS);
   // Auto prompts always schedule the next one. A manual log restarts the
   // timer, unless the morning sleep prompt is what's queued.
-  if (mode != "manual" || (type == "manual" && st.nextKind != "sleep")) ML.scheduleNext();
+  else if (mode != "manual" || (type == "manual" && st.nextKind != "sleep")) ML.scheduleNext();
   Bangle.buzz(40);
   setTimeout(function() { load(); }, 300);
 }
@@ -221,47 +232,80 @@ function cellAt(x, y) {
 }
 function tap(i) {
   var name = cells()[i];
-  if (name == "back") { stage = "grid"; Bangle.buzz(30); drawGrid(); return; }
   toggles[name] = !toggles[name]; Bangle.buzz(15); drawCell(i);
 }
-// Taps and holds both come from drag events, so a hold never also toggles.
+// Taps come from drag events, so a swipe (which moves) never also toggles.
 var press = null;
 function onDrag(e) {
   if (finished || stage == "rate") return;
   if (e.b) {
-    if (!press) {
-      press = {x: e.x, y: e.y, i: cellAt(e.x, e.y)};
-      if (stage == "grid" && press.i >= 0 && EMO[MAIN[press.i]]) press.t = setTimeout(function() {
-        press.t = undefined; press.held = true;
-        stage = "detail"; Bangle.buzz(40); drawGrid();
-      }, LONG_MS);
-    } else if (Math.abs(e.x - press.x) + Math.abs(e.y - press.y) > 20) {
-      press.moved = true;
-      if (press.t) { clearTimeout(press.t); press.t = undefined; }
-    }
+    if (!press) press = {x: e.x, y: e.y, i: cellAt(e.x, e.y)};
+    else if (Math.abs(e.x - press.x) + Math.abs(e.y - press.y) > 20) press.moved = true;
   } else if (press) {
-    if (press.t) clearTimeout(press.t);
-    if (!press.moved && !press.held && press.i >= 0) tap(press.i);
+    if (!press.moved && press.i >= 0) tap(press.i);
     press = null;
   }
+}
+function onSwipe(lr) {
+  if (finished || stage == "rate" || !lr) return;
+  // The swipe arrives before the finger lifts, and a fast one may not have
+  // moved far enough between drag events to count, so cancel the press here.
+  if (press) press.moved = true;
+  page = (page - lr + PAGES.length) % PAGES.length;
+  Bangle.buzz(30); drawGrid();
 }
 function onTouch(n, e) {
   if (finished || stage != "rate" || e.y < TOP) return;
   finish("sleep", null, [2, 1, 0][Math.min(2, Math.floor((e.y - TOP) / BH))]);
 }
+// When a prompt pops up by itself, a button press in the first moment is
+// probably meant to wake the screen, not to save an empty check-in.
+var BTN_GUARD_MS = 1500, btnReadyAt = (mode == "manual") ? 0 : Date.now() + BTN_GUARD_MS;
+// On a prompt, one press saves (or skips the sleep screen) and a double press
+// means "busy, ask again in a bit". So a single press waits DOUBLE_MS to see
+// if a second one follows. Manual logs have no busy, so act at once.
+var DOUBLE_MS = 400, btnTimer;
 function onBtn() {
-  // Button saves the grid. On the sleep screen it skips.
-  if (stage == "rate") finish("sleep_skipped", null, "");
-  else save();
+  if (finished || Date.now() < btnReadyAt) return;
+  if (btnTimer) {
+    clearTimeout(btnTimer); btnTimer = undefined;
+    Bangle.buzz(40).then(function() { return new Promise(function(res) { setTimeout(res, 100); }); })
+      .then(function() { finish(stage == "rate" ? "sleep_busy" : "busy", null, ""); });
+    return;
+  }
+  if (mode == "manual") { save(); return; }
+  btnTimer = setTimeout(function() {
+    btnTimer = undefined;
+    // Button saves the grid. On the sleep screen it skips.
+    if (stage == "rate") finish("sleep_skipped", null, "");
+    else save();
+  }, DOUBLE_MS);
+}
+// A timed calendar event (not all-day, under EVENT_MAX_H long) overlapping
+// the prompt explains a missed check-in. Returns the latest such event's end
+// (ms), or 0 if there's none.
+var EVENT_MAX_H = 3, EVENT_AFTER_MINS = 5;
+function busyUntil() {
+  var cal = S.readJSON("android.calendar.json", 1) || [], end = 0, now = Date.now();
+  cal.forEach(function(e) {
+    var d = e.durationInSeconds || 0, s = e.timestamp * 1000, en = s + d * 1000;
+    if (e.allDay || !d || d >= EVENT_MAX_H * 3600) return;
+    if (s <= now && en > shownAt && en > end) end = en;
+  });
+  return end;
 }
 var timer = setTimeout(function() {
   if (stage == "rate") finish("sleep_missed", null, "");
   else if (anyToggled() || mode == "manual") save();
-  else finish("missed", null, "");
+  else {
+    var end = busyUntil();
+    if (end) finish("busy", null, "", end + EVENT_AFTER_MINS * 60000);
+    else finish("missed", null, "");
+  }
 }, CFG.timeout * 60000);
 
 // ---------- start ----------
-Bangle.setUI({mode: "custom", touch: onTouch, drag: onDrag, btn: onBtn});
+Bangle.setUI({mode: "custom", touch: onTouch, drag: onDrag, swipe: onSwipe, btn: onBtn});
 if (stage == "grid") drawGrid(); else drawRate();
 if (mode != "manual") {
   Bangle.setLCDPower(1);

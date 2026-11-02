@@ -5,6 +5,7 @@
 <body style="padding:1em">
   <p>Download your Mood Log data as CSV, or clear it from the watch.</p>
   <button class="btn btn-primary" id="dl">Download CSV</button>
+  <button class="btn" id="dl2">Download v0.03-0.06 CSV</button>
   <button class="btn" id="dlold">Download old (v0.02) CSV</button>
   <button class="btn btn-error" id="del">Delete data from watch</button>
   <script src="../../core/lib/interface.js"></script>
@@ -18,13 +19,16 @@
         Util.saveCSV(name, data);
       });
     }
-    document.getElementById("dl").addEventListener("click", function() { download("moodlog2.csv", "moodlog"); });
+    document.getElementById("dl").addEventListener("click", function() { download("moodlog3.csv", "moodlog"); });
+    document.getElementById("dl2").addEventListener("click", function() { download("moodlog2.csv", "moodlog-v2"); });
     document.getElementById("dlold").addEventListener("click", function() { download("moodlog.csv", "moodlog-v1"); });
     document.getElementById("del").addEventListener("click", function() {
       if (!confirm("Delete all Mood Log data (new and old) from the watch? Download it first.")) return;
       Util.showModal("Deleting...");
-      Util.eraseStorageFile("moodlog2.csv", function() {
-        Util.eraseStorageFile("moodlog.csv", function() { Util.hideModal(); alert("Deleted."); });
+      Util.eraseStorageFile("moodlog3.csv", function() {
+        Util.eraseStorageFile("moodlog2.csv", function() {
+          Util.eraseStorageFile("moodlog.csv", function() { Util.hideModal(); alert("Deleted."); });
+        });
       });
     });
   </script>
